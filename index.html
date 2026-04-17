@@ -6291,7 +6291,7 @@ async function runPdfExport(){
         pdf.setFont('helvetica','bold'); pdf.setFontSize(8); pdf.setTextColor(...ACCENT);
         pdf.text('PIES DE MICRÓFONO', M, pieY);
 
-        const PIE_KEYS = [{key:'C',label:'Pie Corto'},{key:'A',label:'Pie Alto'},{key:'P',label:'Pie Pianista'},{key:'R',label:'Pie Recto'}];
+        const PIE_KEYS = [{key:'C',label:'Pie Corto'},{key:'A',label:'Pie Alto'},{key:'P',label:'Pie Pinza'},{key:'R',label:'Pie Recto'}];
         const pieHead = ['Pie', ...S.artists.map(a=>safe(a.nombre,10)), 'Total'];
         const pieBody = PIE_KEYS.map(p=>{
           const counts = S.artists.map(a=>a.channels.filter(ch=>ch.pies?.[p.key]).length);
