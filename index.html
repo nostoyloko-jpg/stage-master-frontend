@@ -6099,6 +6099,11 @@ async function runPdfExport(){
     alert('Error: jspdf-autotable no se ha cargado. Comprueba tu conexión a internet.');
     btn.disabled=false;prog.style.display='none';return;
   }
+  // Self-contained time helpers — independent of external functions
+  function _t2m(t){ if(!t||!String(t).match(/^\d{1,2}:\d{2}$/))return null; const[h,m]=String(t).split(':').map(Number); return h*60+m; }
+  function _dur(ini,fin){ const i=_t2m(ini),f=_t2m(fin); if(i===null||f===null)return null; let d=f-i; if(d<=0)d+=1440; return d; }
+  function _fmtDur(d){ if(!d||d<=0)return '--'; return Math.floor(d/60)+'h'+(d%60?String(d%60).padStart(2,'0')+'min':''); }
+
   const BG    = [255,255,255];
   const BLACK = [0,0,0];
   const GRAY1 = [240,240,240]; // table header bg
@@ -6193,15 +6198,24 @@ async function runPdfExport(){
         ...AT_STYLES,
         startY: y0+5,
         head:[['#','Artista','Fecha','Horario','Duracion','Changeover','Sistema / Notas']],
-        body: S.artists.map((a,i)=>[
-          i+1,
-          a.nombre,
-          fmtDate(a.fecha||''),
-          timeRange(a.inicio,a.fin),
-          a.duracion||'--',
-          a.changeover||'--',
-          safe(a.notas||'',60),
-        ]),
+        body: S.artists.map((a,i)=>{
+          const durStr=_fmtDur(_dur(a.inicio,a.fin));
+          let coStr='--';
+          if(i<S.artists.length-1){
+            const next=S.artists[i+1];
+            const co=_dur(a.fin, next.inicio);
+            if(co&&co>0&&co<240) coStr=co+'min';
+          }
+          return [
+            i+1,
+            a.nombre,
+            fmtDate(a.fecha||''),
+            timeRange(a.inicio,a.fin),
+            durStr,
+            coStr,
+            safe(a.notas||'',60),
+          ];
+        }),
         columnStyles:{ 0:{cellWidth:8}, 1:{cellWidth:48}, 2:{cellWidth:22}, 3:{cellWidth:28,fontStyle:'bold'}, 4:{cellWidth:18}, 5:{cellWidth:22} },
       });
       // Soundcheck
@@ -6212,15 +6226,18 @@ async function runPdfExport(){
         ...AT_STYLES,
         startY: y1+3,
         head:[['#','Artista','Fecha SC','Call','Horario SC','Duracion','Sistema / Notas']],
-        body: S.artists.map((a,i)=>[
-          i+1,
-          a.nombre,
-          fmtDate(a.soundcheckFecha||a.fecha||''),
-          a.soundcheckCall||'--',
-          timeRange(a.soundcheckInicio,a.soundcheckFin),
-          a.soundcheckDuracion||'--',
-          safe(a.soundcheckNotas||'',60),
-        ]),
+        body: S.artists.map((a,i)=>{
+          const scDurStr=_fmtDur(_dur(a.soundcheckInicio,a.soundcheckFin));
+          return [
+            i+1,
+            a.nombre,
+            fmtDate(a.soundcheckFecha||a.fecha||''),
+            a.soundcheckCall||'--',
+            timeRange(a.soundcheckInicio,a.soundcheckFin),
+            scDurStr,
+            safe(a.soundcheckNotas||'',60),
+          ];
+        }),
         columnStyles:{ 0:{cellWidth:8}, 1:{cellWidth:48}, 2:{cellWidth:22}, 3:{cellWidth:16}, 4:{cellWidth:28,fontStyle:'bold'}, 5:{cellWidth:18} },
       });
       addFooter(pdf,'Orden del dia');
