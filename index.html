@@ -6215,11 +6215,11 @@ async function runPdfExport(){
         body: S.artists.map((a,i)=>[
           i+1,
           a.nombre,
-          fmtDate(a.scFecha||''),
-          a.scCall||'--',
-          timeRange(a.scInicio,a.scFin),
-          a.scDuracion||'--',
-          safe(a.scNotas||'',60),
+          fmtDate(a.soundcheckFecha||a.fecha||''),
+          a.soundcheckCall||'--',
+          timeRange(a.soundcheckInicio,a.soundcheckFin),
+          a.soundcheckDuracion||'--',
+          safe(a.soundcheckNotas||'',60),
         ]),
         columnStyles:{ 0:{cellWidth:8}, 1:{cellWidth:48}, 2:{cellWidth:22}, 3:{cellWidth:16}, 4:{cellWidth:28,fontStyle:'bold'}, 5:{cellWidth:18} },
       });
