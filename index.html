@@ -8,8 +8,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CH List">
 <title>Channel List App © Luis Anton</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
 :root {
@@ -1208,8 +1208,26 @@ self.addEventListener('fetch',e=>e.respondWith(caches.match(e.request).then(r=>r
         <button class="btn-icon" onclick="closePdfModal()" style="font-size:12px">✕</button>
       </div>
       <div class="pdf-modal-body">
+        <!-- Mode selector -->
+        <div style="display:flex;gap:6px;margin-bottom:14px;padding:10px;background:var(--bg3);border-radius:var(--radius);border:1px solid var(--border)">
+          <div style="font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;align-self:center;margin-right:4px">CH List:</div>
+          <label style="display:flex;align-items:center;gap:5px;cursor:pointer;flex:1">
+            <input type="radio" name="pdf-chlist-mode" value="simple" id="pdf-mode-simple" style="accent-color:var(--accent)" onchange="window._pdfMode='simple'">
+            <div>
+              <div style="font-size:11px;font-weight:600;color:var(--text)">Simple</div>
+              <div style="font-size:9px;color:var(--text3)">Vertical · Solo lo esencial</div>
+            </div>
+          </label>
+          <label style="display:flex;align-items:center;gap:5px;cursor:pointer;flex:1">
+            <input type="radio" name="pdf-chlist-mode" value="extended" id="pdf-mode-extended" checked style="accent-color:var(--accent)" onchange="window._pdfMode='extended'">
+            <div>
+              <div style="font-size:11px;font-weight:600;color:var(--text)">Extendido</div>
+              <div style="font-size:9px;color:var(--text3)">Horizontal · Subboxes, pies, obs</div>
+            </div>
+          </label>
+        </div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <span style="font-size:11px;color:var(--text3)">Selecciona qué apartados incluir en el PDF:</span>
+          <span style="font-size:11px;color:var(--text3)">Selecciona qué apartados incluir:</span>
           <button class="btn btn-sm" id="pdf-toggle-all-btn" onclick="toggleAllPdfSections()" style="font-size:10px;padding:3px 10px">Deseleccionar todo</button>
         </div>
         <div id="pdf-sections-list"></div>
@@ -5889,8 +5907,111 @@ const _origSaveS=saveS;
 // (already handled by setFileName, no extra needed)
 
 // ══════════════════════════════════════════════
-// PDF EXPORT — html2canvas + jsPDF
+// PDF EXPORT — native jsPDF (no html2canvas)
 // ══════════════════════════════════════════════
+
+function hexToRgb(hex){
+  const r=parseInt(hex.slice(1,3),16)||0;
+  const g=parseInt(hex.slice(3,5),16)||0;
+  const b=parseInt(hex.slice(5,7),16)||0;
+  return [r,g,b];
+}
+
+function safe(s,max){
+  const str=String(s||'');
+  return str.length>max?str.slice(0,max-1)+'...':str;
+}
+
+function escXml(s){
+  return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Build subbox SVG for PDF — print-safe, no CSS vars
+function buildSubboxSvgForPdf(sb, slots){
+  const cfg=S.sbConfig||{rows:2,cols:8};
+  const COLS=cfg.cols||8, ROWS=cfg.rows||2;
+  const CW=70, CH=66, PAD=14, LABEL_H=22;
+  const svgW=COLS*CW+PAD*2, svgH=ROWS*CH+PAD*2+LABEL_H;
+  const [cr,cg,cb]=hexToRgb(sb.color);
+  const colFill=`rgba(${cr},${cg},${cb},0.15)`;
+  const colFull=`rgba(${cr},${cg},${cb},0.75)`;
+
+  let svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}">`;
+  svg+=`<rect width="${svgW}" height="${svgH}" fill="white"/>`;
+  svg+=`<rect x="1" y="1" width="${svgW-2}" height="${svgH-2}" rx="7" fill="white" stroke="${sb.color}" stroke-width="2"/>`;
+  svg+=`<rect x="1" y="1" width="${svgW-2}" height="${LABEL_H}" rx="7" fill="${colFill}"/>`;
+  svg+=`<rect x="1" y="${LABEL_H-4}" width="${svgW-2}" height="4" fill="${colFill}"/>`;
+  svg+=`<text x="${svgW/2}" y="${LABEL_H-6}" text-anchor="middle" font-size="10" fill="${sb.color}" font-family="Arial,Helvetica,sans-serif" font-weight="bold" letter-spacing="2">SUBBOX ${sb.letter}</text>`;
+
+  for(let row=0;row<ROWS;row++){
+    for(let col=0;col<COLS;col++){
+      const slot=row*COLS+col+1;
+      const cx=PAD+col*CW+CW/2;
+      const cy=PAD+LABEL_H+row*CH+CH/2;
+      const r=22;
+      const info=slots[slot];
+      const has=info&&info.instrumento;
+
+      svg+=`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${has?colFull:'#f5f5f5'}" stroke="${has?sb.color:'#ccc'}" stroke-width="${has?2:1}"/>`;
+      svg+=`<circle cx="${cx}" cy="${cy}" r="${r-6}" fill="none" stroke="${has?`rgba(${cr},${cg},${cb},0.3)`:'#e5e5e5'}" stroke-width="1"/>`;
+      // XLR pin dots
+      [[-7,-5],[7,-5],[0,8]].forEach(([px,py])=>{
+        svg+=`<circle cx="${cx+px}" cy="${cy+py}" r="2.5" fill="${has?'rgba(0,0,0,0.3)':'#ccc'}"/>`;
+      });
+
+      if(has){
+        const label=info.instrumento.toUpperCase();
+        const words=label.split(/[\s\/\-]+/);
+        let l1='',l2='';
+        words.forEach(w=>{
+          if(!l1&&(l1+w).length<=8) l1=w;
+          else if(!l1) l1=w.slice(0,8);
+          else if(!l2&&(l2+(l2?' ':'')+w).length<=8) l2+=(l2?' ':'')+w;
+          else if(!l2) l2=w.slice(0,8);
+        });
+        if(l2){
+          svg+=`<text x="${cx}" y="${cy-3}" text-anchor="middle" font-size="8" fill="white" font-family="Arial,Helvetica,sans-serif" font-weight="bold">${escXml(l1)}</text>`;
+          svg+=`<text x="${cx}" y="${cy+7}" text-anchor="middle" font-size="8" fill="white" font-family="Arial,Helvetica,sans-serif" font-weight="bold">${escXml(l2)}</text>`;
+        } else {
+          svg+=`<text x="${cx}" y="${cy+3}" text-anchor="middle" font-size="8" fill="white" font-family="Arial,Helvetica,sans-serif" font-weight="bold">${escXml(label.slice(0,8))}</text>`;
+        }
+        svg+=`<text x="${cx}" y="${cy+r+11}" text-anchor="middle" font-size="8" fill="#444" font-family="Arial,Helvetica,sans-serif">${slot}</text>`;
+        svg+=`<text x="${cx-r+4}" y="${cy-r+10}" font-size="7" fill="rgba(0,0,0,0.5)" font-family="Arial,Helvetica,sans-serif">${info.chNum}</text>`;
+        const cnt=(info.entries||[]).length;
+        if(cnt>1){
+          // Show count badge
+          svg+=`<circle cx="${cx+r-6}" cy="${cy-r+6}" r="7" fill="#e94560" stroke="white" stroke-width="1.5"/>`;
+          svg+=`<text x="${cx+r-6}" y="${cy-r+10}" text-anchor="middle" font-size="8" fill="white" font-weight="bold" font-family="Arial,Helvetica,sans-serif">${cnt}</text>`;
+          // Show artist initials below slot number
+          const initials=info.entries.slice(0,4).map(e=>(e.artistName||'?').split(/\s+/).map(w=>w[0]).join('').slice(0,3)).join(' ');
+          svg+=`<text x="${cx}" y="${cy+r+20}" text-anchor="middle" font-size="6" fill="#666" font-family="Arial,Helvetica,sans-serif">${escXml(initials)}</text>`;
+        }
+      } else {
+        svg+=`<text x="${cx}" y="${cy+r+11}" text-anchor="middle" font-size="8" fill="#aaa" font-family="Arial,Helvetica,sans-serif">${slot}</text>`;
+      }
+    }
+  }
+  svg+=`</svg>`;
+  return {svg, width:svgW, height:svgH};
+}
+
+async function svgToDataUrl(svgString, width, height){
+  const blob=new Blob([svgString],{type:'image/svg+xml;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  try{
+    const img=await new Promise((res,rej)=>{
+      const im=new Image(); im.onload=()=>res(im); im.onerror=()=>rej(new Error('SVG load failed')); im.src=url;
+    });
+    const canvas=document.createElement('canvas');
+    canvas.width=width*2; canvas.height=height*2;
+    const ctx=canvas.getContext('2d');
+    ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    return canvas.toDataURL('image/png',1.0);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 function getPdfSections(){
   // Returns array of {id, label, sub, pageId, checked}
@@ -5898,7 +6019,7 @@ function getPdfSections(){
     {id:'orden',    label:'Orden del día',        sub:'Lineup y timeline',       pageId:'page-orden',   checked:true},
     {id:'summary',  label:'Resumen microfonía',   sub:'Totales y desglose',      pageId:'page-summary', checked:true},
     {id:'rchlist',  label:'Resumen CH List',      sub:'Todos los artistas',      pageId:'page-rchlist', checked:true},
-    {id:'sblist',   label:'Resumen Subbox',       sub:'Diagrama visual',         pageId:'page-sblist',  checked:false},
+    {id:'sblist',   label:'Resumen Subbox',       sub:'Diagrama visual',         pageId:'page-sblist',  checked:true},
   ];
   // Add one entry per artist CH list
   S.artists.forEach(a=>{
@@ -5914,9 +6035,13 @@ function getPdfSections(){
 }
 
 let _pdfSections=[];
+window._pdfMode = 'extended'; // default
 
 function openPdfModal(){
   _pdfSections=getPdfSections();
+  // Sync radio to current mode
+  const radio = document.getElementById('pdf-mode-'+window._pdfMode);
+  if(radio) radio.checked = true;
   const list=document.getElementById('pdf-sections-list');
   list.innerHTML=_pdfSections.map((s,i)=>`
     <div class="pdf-section-row" onclick="togglePdfSection(${i})">
@@ -5962,178 +6087,467 @@ async function runPdfExport(){
   const prog=document.getElementById('pdf-progress');
   btn.disabled=true;
   prog.style.display='block';
+  prog.textContent='Generando PDF...';
 
   const {jsPDF}=window.jspdf;
-  const isSimple=document.body.classList.contains('simple');
-  const margin=10;
-  // All pages: portrait if simple+all-artist, else landscape
-  const allArtist=selected.every(s=>s.id.startsWith('artist-'));
-  const globalPortrait=isSimple&&allArtist;
-  const pdf=new jsPDF({orientation:globalPortrait?'p':'l',unit:'mm',format:'a4'});
+  if(!jsPDF){alert('Error: jsPDF no disponible');btn.disabled=false;prog.style.display='none';return;}
+  const pdf = new jsPDF({orientation:'l', unit:'mm', format:'a4'});
+  console.log('autoTable available:', typeof pdf.autoTable);
+  console.log('Selected sections:', selected.map(s=>s.id));
+  console.log('Artists:', S.artists.map(a=>({id:a.id, nombre:a.nombre, channels:a.channels?.length})));
+  if(typeof pdf.autoTable !== 'function'){
+    alert('Error: jspdf-autotable no se ha cargado. Comprueba tu conexión a internet.');
+    btn.disabled=false;prog.style.display='none';return;
+  }
+  const BG    = [255,255,255];
+  const BLACK = [0,0,0];
+  const GRAY1 = [240,240,240]; // table header bg
+  const GRAY2 = [250,250,250]; // alternate row
+  const GRAY3 = [100,100,100]; // secondary text
+  const ACCENT= [180,0,30];    // red accent — visible when printed
 
-  const sidebar=document.getElementById('sidebar');
-  const topbar=document.getElementById('topbar');
-  sidebar.style.display='none';
-  topbar.style.display='none';
-  const allPages=document.querySelectorAll('.page');
-  const origDisplay={};
-  allPages.forEach(p=>{origDisplay[p.id]=p.style.display;p.style.display='none';});
+  // Arrow as plain text — no unicode issues
+  const ARR = '->';
 
-  // ── COVER PAGE ──
-  const coverPortrait=globalPortrait;
-  const coverW=coverPortrait?210:297, coverH=coverPortrait?297:210;
-  // Draw cover
-  pdf.setFillColor(13,15,20);
-  pdf.rect(0,0,coverW,coverH,'F');
-  // Accent bar left
-  pdf.setFillColor(233,69,96);
-  pdf.rect(0,0,4,coverH,'F');
-  // Event name
-  pdf.setTextColor(240,244,248);
-  pdf.setFontSize(28);pdf.setFont('helvetica','bold');
-  pdf.text(S.event.nombre||'Channel List',14,40);
-  // Subtitle line
-  pdf.setFontSize(11);pdf.setFont('helvetica','normal');
-  pdf.setTextColor(138,144,160);
-  const subParts=[S.event.lugar,S.event.fecha?fmtDate(S.event.fecha):''].filter(Boolean);
-  pdf.text(subParts.join('  ·  '),14,52);
-  // Divider
-  pdf.setDrawColor(34,39,54);pdf.setLineWidth(0.5);
-  pdf.line(14,58,coverW-14,58);
-  // Artists list
-  pdf.setFontSize(10);pdf.setTextColor(240,244,248);
-  let ay=72;
-  S.artists.forEach((a,i)=>{
-    pdf.setFont('helvetica','bold');pdf.setTextColor(233,69,96);
-    pdf.text(String(i+1).padStart(2,'0'),14,ay);
-    pdf.setFont('helvetica','bold');pdf.setTextColor(240,244,248);
-    pdf.text(a.nombre,28,ay);
-    pdf.setFont('helvetica','normal');pdf.setTextColor(138,144,160);
-    pdf.text(`${a.canales} ch  ·  ${a.inicio||'—'}→${a.fin||'—'}`,coverW-14,ay,{align:'right'});
-    ay+=10;if(ay>coverH-40){ay=72;}
-  });
-  // Footer
-  pdf.setFontSize(8);pdf.setTextColor(85,94,112);
-  pdf.text('© Luis Anton · lag.sound@gmail.com',coverW-14,coverH-10,{align:'right'});
-  pdf.setTextColor(55,62,80);
-  pdf.text(`v${S.version||'1'}  ·  Generado ${new Date().toLocaleDateString('es-ES')}`,14,coverH-10);
-
-  let first=true;
-  for(let si=0;si<selected.length;si++){
-    const sec=selected[si];
-    prog.textContent='Generando '+(si+1)+'/'+selected.length+': '+sec.label+'...';
-    const pageEl=document.getElementById(sec.pageId);
-    if(!pageEl) continue;
-
-    const isArtist=sec.id.startsWith('artist-');
-    const needPortrait=isSimple&&isArtist;
-    pageEl.style.display='flex';
-
-    // Save & force styles
-    const savedStyles=[];
-    function fs(el,styles){
-      if(!el) return;
-      savedStyles.push({el,orig:el.style.cssText});
-      Object.assign(el.style,styles);
-    }
-
-    if(needPortrait){
-      fs(pageEl.querySelector('.ch-wrap'),
-        {maxWidth:'none',width:'100%',overflowX:'visible'});
-      fs(pageEl.querySelector('.artist-page-header'),
-        {width:'100%',maxWidth:'none',display:'flex',flexWrap:'nowrap',
-         gap:'24px',padding:'8px 14px',gridTemplateColumns:'none'});
-      fs(pageEl.querySelector('[id^="chsum-"]'),
-        {width:'100%',maxWidth:'none'});
-    }
-
-    // Hide toolbar/buttons
-    pageEl.querySelectorAll('.ch-toolbar,.delete-btn').forEach(el=>{
-      savedStyles.push({el,orig:el.style.cssText});el.style.display='none';
-    });
-    pageEl.querySelectorAll('button:not(.pie-cb)').forEach(el=>{
-      savedStyles.push({el,orig:el.style.cssText});el.style.display='none';
-    });
-
-    await new Promise(r=>setTimeout(r,120));
-
-    // Replace inputs/selects/textareas with text spans
-    const editEls=pageEl.querySelectorAll('input[type=text],input[type=number],select,textarea');
-    const editOrig=[];
-    editEls.forEach(el=>{
-      const val=el.tagName==='SELECT'
-        ?(el.options[el.selectedIndex]?el.options[el.selectedIndex].text:'')
-        :el.value;
-      const span=document.createElement('span');
-      span.textContent=val||(el.placeholder!=='—'?el.placeholder:'')||'';
-      span.style.cssText='display:inline-block;font-size:inherit;font-family:inherit;color:inherit;line-height:1.6;padding:0;white-space:pre-wrap;word-break:break-word;';
-      el.insertAdjacentElement('afterend',span);
-      el.style.display='none';
-      editOrig.push({el,span});
-    });
-
-    // Fix td padding
-    const allTds=pageEl.querySelectorAll('.ch-table td,.ch-table th');
-    const origTd=[];
-    allTds.forEach(td=>{
-      origTd.push({td,css:td.style.cssText});
-      td.style.padding='5px 8px';
-      td.style.lineHeight='1.6';
-      td.style.verticalAlign='middle';
-      td.style.height='auto';
-    });
-
-    await new Promise(r=>setTimeout(r,80));
-
-    try{
-      const bgColor=getComputedStyle(document.body).getPropertyValue('--bg').trim()||'#0d0f14';
-      const canvas=await html2canvas(pageEl,{
-        scale:2, useCORS:true, allowTaint:true,
-        backgroundColor:bgColor, logging:false,
-        windowWidth:pageEl.scrollWidth, windowHeight:pageEl.scrollHeight
-      });
-
-      editOrig.forEach(function(o){o.el.style.display='';o.span.remove();});
-      origTd.forEach(function(o){o.td.style.cssText=o.css;});
-      savedStyles.forEach(function(o){o.el.style.cssText=o.orig;});
-
-      // Add page with correct orientation
-      if(!first){
-        if(needPortrait&&!globalPortrait) pdf.addPage([210,297],'p');
-        else if(!needPortrait&&globalPortrait) pdf.addPage([297,210],'l');
-        else pdf.addPage();
-      }
-      first=false;
-
-      const curW=pdf.internal.pageSize.getWidth();
-      const curH=pdf.internal.pageSize.getHeight();
-      const availW=curW-margin*2;
-      const availH=curH-margin*2-8;
-      const ratio=canvas.height/canvas.width;
-      let fw=availW, fh=fw*ratio;
-      if(fh>availH){fh=availH;fw=fh/ratio;}
-
-      pdf.addImage(canvas.toDataURL('image/jpeg',0.93),'JPEG',(curW-fw)/2,margin,fw,fh);
-      pdf.setFontSize(7);pdf.setTextColor(150,150,150);
-      pdf.text(sec.label,margin,curH-3);
-      pdf.text('© Luis Anton · lag.sound@gmail.com',curW-margin,curH-3,{align:'right'});
-
-    }catch(err){
-      editOrig.forEach(function(o){o.el.style.display='';o.span.remove();});
-      origTd.forEach(function(o){o.td.style.cssText=o.css;});
-      savedStyles.forEach(function(o){o.el.style.cssText=o.orig;});
-    }
-    pageEl.style.display='none';
+  // Format time range safely
+  function timeRange(a,b){
+    if(!a&&!b) return '--';
+    if(a&&b) return `${a} ${ARR} ${b}`;
+    return a||b||'--';
   }
 
-  sidebar.style.display='';
-  topbar.style.display='';
-  allPages.forEach(p=>{p.style.display=origDisplay[p.id]||'';});
+  const PW=297, PH=210, M=12;
 
-  const filename=(S.event.nombre||'ChannelList').replace(/[^a-zA-Z0-9_ -]/g,'').trim()+'_CH_List.pdf';
-  pdf.save(filename);
-  btn.disabled=false;
+  // ── autoTable default styles ──
+  const AT_STYLES = {
+    styles:{ font:'helvetica', fontSize:8, cellPadding:2, textColor:BLACK, lineColor:[200,200,200], lineWidth:0.2 },
+    headStyles:{ fillColor:GRAY1, textColor:BLACK, fontStyle:'bold', fontSize:7.5 },
+    alternateRowStyles:{ fillColor:GRAY2 },
+    margin:{ left:M, right:M },
+    tableLineColor:[180,180,180], tableLineWidth:0.3,
+  };
+
+  function addPageHeader(pdf, title, subtitle, pw, ph){
+    pw = pw||PW; ph = ph||PH;
+    pdf.setFillColor(...BG); pdf.rect(0,0,pw,ph,'F');
+    pdf.setFillColor(...ACCENT); pdf.rect(0,0,pw,4,'F');
+    pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(...BLACK);
+    pdf.text(title, M, 12);
+    if(subtitle){
+      pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY3);
+      pdf.text(subtitle, M, 18);
+    }
+    return subtitle ? 22 : 16;
+  }
+
+  function addFooter(pdf, label, pw, ph){
+    pw = pw||PW; ph = ph||PH;
+    pdf.setFont('helvetica','normal'); pdf.setFontSize(7); pdf.setTextColor(...GRAY3);
+    pdf.text(label, M, ph-4);
+    pdf.text('(c) Luis Anton  lag.sound@gmail.com', pw-M, ph-4, {align:'right'});
+    pdf.setDrawColor(...GRAY3); pdf.setLineWidth(0.2);
+    pdf.line(M, ph-6, pw-M, ph-6);
+  }
+
+  // ── 1. COVER ──
+  pdf.setFillColor(...BG); pdf.rect(0,0,PW,PH,'F');
+  pdf.setFillColor(...ACCENT); pdf.rect(0,0,4,PH,'F');
+  pdf.setFont('helvetica','bold'); pdf.setFontSize(28); pdf.setTextColor(...BLACK);
+  pdf.text(S.event.nombre||'Channel List', 14, 45);
+  pdf.setFont('helvetica','normal'); pdf.setFontSize(12); pdf.setTextColor(...GRAY3);
+  const subParts=[S.event.lugar, S.event.fecha?fmtDate(S.event.fecha):''].filter(Boolean);
+  pdf.text(subParts.join('   |   '), 14, 56);
+  pdf.setDrawColor(...GRAY3); pdf.setLineWidth(0.4);
+  pdf.line(14, 61, PW-14, 61);
+  // Artists list
+  pdf.setFontSize(9); let ay=72;
+  S.artists.forEach((a,i)=>{
+    pdf.setFont('helvetica','bold'); pdf.setTextColor(...ACCENT);
+    pdf.text(String(i+1).padStart(2,'0'), 14, ay);
+    pdf.setTextColor(...BLACK);
+    pdf.text(a.nombre, 26, ay);
+    pdf.setFont('helvetica','normal'); pdf.setTextColor(...GRAY3);
+    pdf.text(`${a.canales} ch   ${timeRange(a.inicio,a.fin)}`, PW-14, ay, {align:'right'});
+    ay+=9; if(ay>PH-20) ay=72;
+  });
+  pdf.setFontSize(7); pdf.setTextColor(...GRAY3);
+  pdf.text(`v${S.version||'1'}  |  Generado ${new Date().toLocaleDateString('es-ES')}`, 14, PH-8);
+  pdf.text('(c) Luis Anton  lag.sound@gmail.com', PW-14, PH-8, {align:'right'});
+
+  for(let si=0;si<selected.length;si++){
+    const sec=selected[si];
+    prog.textContent=`Generando ${si+1}/${selected.length}: ${sec.label}...`;
+    await new Promise(r=>setTimeout(r,10));
+
+    // ── 2. ORDEN DEL DIA ──
+    if(sec.id==='orden'){
+      pdf.addPage([PW,PH],'l');
+      const y0=addPageHeader(pdf,
+        'ORDEN DEL DIA  |  '+safe(S.event.nombre||'',50),
+        [S.event.lugar, S.event.tecnico?'Tecnico: '+S.event.tecnico:''].filter(Boolean).join('   |   ')
+      );
+      // Timeline
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(8); pdf.setTextColor(...ACCENT);
+      pdf.text('TIMELINE', M, y0+2);
+      pdf.autoTable({
+        ...AT_STYLES,
+        startY: y0+5,
+        head:[['#','Artista','Fecha','Horario','Duracion','Changeover','Sistema / Notas']],
+        body: S.artists.map((a,i)=>[
+          i+1,
+          a.nombre,
+          fmtDate(a.fecha||''),
+          timeRange(a.inicio,a.fin),
+          a.duracion||'--',
+          a.changeover||'--',
+          safe(a.notas||'',60),
+        ]),
+        columnStyles:{ 0:{cellWidth:8}, 1:{cellWidth:48}, 2:{cellWidth:22}, 3:{cellWidth:28,fontStyle:'bold'}, 4:{cellWidth:18}, 5:{cellWidth:22} },
+      });
+      // Soundcheck
+      const y1=pdf.lastAutoTable.finalY+6;
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(8); pdf.setTextColor(...ACCENT);
+      pdf.text('SOUNDCHECK', M, y1);
+      pdf.autoTable({
+        ...AT_STYLES,
+        startY: y1+3,
+        head:[['#','Artista','Fecha SC','Call','Horario SC','Duracion','Sistema / Notas']],
+        body: S.artists.map((a,i)=>[
+          i+1,
+          a.nombre,
+          fmtDate(a.scFecha||''),
+          a.scCall||'--',
+          timeRange(a.scInicio,a.scFin),
+          a.scDuracion||'--',
+          safe(a.scNotas||'',60),
+        ]),
+        columnStyles:{ 0:{cellWidth:8}, 1:{cellWidth:48}, 2:{cellWidth:22}, 3:{cellWidth:16}, 4:{cellWidth:28,fontStyle:'bold'}, 5:{cellWidth:18} },
+      });
+      addFooter(pdf,'Orden del dia');
+    }
+
+    // ── 3. RESUMEN MICROFONIA ──
+    else if(sec.id==='summary'){
+      pdf.addPage([PW,PH],'l');
+      addPageHeader(pdf,'RESUMEN MICROFONIA  |  '+safe(S.event.nombre||'',50));
+      pdf.autoTable({
+        ...AT_STYLES,
+        startY:20,
+        head:[['Artista','Microfonos','Con micro','DI Mono','DI Stereo','48V','Pie Corto','Pie Alto','Propios']],
+        body: S.artists.map(a=>{
+          const mics=[...new Set(a.channels.filter(ch=>ch.micro).map(ch=>ch.micro))].join(', ');
+          return [
+            a.nombre,
+            safe(mics,45),
+            a.channels.filter(ch=>ch.micro).length||'',
+            a.channels.filter(ch=>ch.di==='M').length||'',
+            a.channels.filter(ch=>ch.di==='ST').length||'',
+            a.channels.filter(ch=>ch.phantom).length||'',
+            a.channels.filter(ch=>ch.pies?.C).length||'',
+            a.channels.filter(ch=>ch.pies?.A).length||'',
+            a.channels.filter(ch=>(ch.obs||'').toLowerCase().includes('propio')).length||'',
+          ];
+        }),
+        columnStyles:{ 0:{cellWidth:42}, 1:{cellWidth:60} },
+      });
+      addFooter(pdf,'Resumen Microfonia');
+    }
+
+    // ── 4. RESUMEN CH LIST ──
+    else if(sec.id==='rchlist'){
+      pdf.addPage([PW,PH],'l');
+      pdf.setFillColor(...BG); pdf.rect(0,0,PW,PH,'F');
+      pdf.setFillColor(...ACCENT); pdf.rect(0,0,PW,4,'F');
+      pdf.setFillColor(...GRAY1); pdf.rect(0,4,PW,14,'F');
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(...BLACK);
+      pdf.text('RESUMEN CH LIST  |  '+safe(S.event.nombre||'',50), M, 13);
+
+      // Combined channel list — all artists, grouped
+      const allRows=[];
+      let lastArtist='';
+      S.artists.forEach(a=>{
+        a.channels.forEach((ch,ci)=>{
+          const pies=[ch.pies?.C?'C':'',ch.pies?.A?'A':'',ch.pies?.P?'P':'',ch.pies?.R?'R':''].filter(Boolean).join('');
+          let subStr='';
+          S.subboxes.forEach(sb=>{
+            const v=(ch.subboxes?.[sb.letter]||'').trim();
+            if(v) subStr+=sb.letter+v+' ';
+          });
+          allRows.push({
+            artista: ci===0 ? a.nombre : '',  // only show artist name on first row
+            num: ci+1,
+            sub: subStr.trim(),
+            instr: ch.instrumento||'',
+            micro: ch.micro||'',
+            di: ch.di||'',
+            phantom: ch.phantom?'48V':'',
+            pies,
+            obs: safe(ch.obs||'',28),
+            _artistFirst: ci===0,
+            _artistName: a.nombre,
+          });
+        });
+      });
+
+      pdf.autoTable({
+        ...AT_STYLES,
+        startY:20,
+        head:[['Artista','#','Sub','Instrumento','Micro','DI','48V','Pies','Obs']],
+        body: allRows.map(r=>[r.artista, r.num, r.sub, r.instr, r.micro, r.di, r.phantom, r.pies, r.obs]),
+        columnStyles:{
+          0:{cellWidth:42, fontStyle:'bold', textColor:ACCENT},
+          1:{cellWidth:10, halign:'center', textColor:GRAY3},
+          2:{cellWidth:16},
+          3:{cellWidth:52, fontStyle:'bold'},
+          4:{cellWidth:38},
+          5:{cellWidth:14, halign:'center'},
+          6:{cellWidth:12, halign:'center'},
+          7:{cellWidth:12, halign:'center'},
+          8:{cellWidth:PW-M*2-196},
+        },
+        didParseCell: function(data){
+          if(data.column.index===6 && data.cell.raw==='48V'){
+            data.cell.styles.textColor=ACCENT; data.cell.styles.fontStyle='bold';
+          }
+          if(data.column.index===2 && data.section==='body' && data.cell.raw){
+            const letter=String(data.cell.raw).charAt(0);
+            const sb=S.subboxes.find(s=>s.letter===letter);
+            if(sb){ const [r,g,b]=hexToRgb(sb.color); data.cell.styles.textColor=[r,g,b]; data.cell.styles.fontStyle='bold'; }
+          }
+          // Artist separator row — slightly darker bg
+          const row=allRows[data.row.index];
+          if(row?._artistFirst && data.section==='body'){
+            data.cell.styles.fillColor=[232,232,232];
+          }
+        },
+        margin:{left:M, right:M, bottom:10},
+      });
+      addFooter(pdf,'Resumen CH List');
+    }
+
+    // ── 5. CH LIST POR ARTISTA ──
+    else if(sec.id==='sblist'){
+      // One page per artist — showing all their subboxes in a 3x2 grid
+      for(const a of S.artists){
+        // Build slots for each subbox for this artist
+        const artistSbItems=[];
+        for(const sb of S.subboxes){
+          const slots={};
+          a.channels.forEach((ch,ci)=>{
+            const v=(ch.subboxes?.[sb.letter]||'').trim();
+            if(!v||isNaN(parseInt(v))) return;
+            const slotNum=parseInt(v);
+            if(!slots[slotNum]) slots[slotNum]={entries:[], chNum:ci+1, instrumento:'', artistName:a.nombre};
+            slots[slotNum].entries.push({instrumento:(ch.instrumento||'').trim()||'?', artistName:a.nombre, chNum:ci+1});
+          });
+          Object.values(slots).forEach(s=>{
+            s.instrumento=s.entries[0]?.instrumento||'';
+            s.chNum=s.entries[0]?.chNum||'';
+            s.multi=s.entries.length>1;
+          });
+          if(Object.keys(slots).length) artistSbItems.push({sb, slots});
+        }
+        if(!artistSbItems.length) continue;
+
+        // Page per artist — 3 cols x 2 rows per page
+        const COLS=2, ROWS=3, PER_PAGE=COLS*ROWS;
+        for(let pageStart=0; pageStart<artistSbItems.length; pageStart+=PER_PAGE){
+          const pageItems=artistSbItems.slice(pageStart, pageStart+PER_PAGE);
+
+          pdf.addPage([PW,PH],'l');
+          pdf.setFillColor(...BG); pdf.rect(0,0,PW,PH,'F');
+          pdf.setFillColor(...ACCENT); pdf.rect(0,0,PW,5,'F');
+          pdf.setFillColor(240,240,240); pdf.rect(0,5,PW,14,'F');
+
+          // Artist name header
+          pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(...ACCENT);
+          pdf.text(a.nombre, M, 15);
+          pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY3);
+          pdf.text(safe(S.event.nombre||'',50), PW-M, 15, {align:'right'});
+          if(pageStart>0){
+            pdf.text(`(cont.)`, M+pdf.getTextWidth(a.nombre)+4, 15);
+          }
+
+          const cellW=(PW-M*2)/COLS;
+          const cellH=(PH-22)/ROWS;
+          const cellPad=3;
+
+          for(let idx=0; idx<pageItems.length; idx++){
+            const {sb, slots}=pageItems[idx];
+            const col=idx%COLS;
+            const row=Math.floor(idx/COLS);
+            const cellX=M+col*cellW;
+            const cellY=21+row*cellH;
+
+            prog.textContent=`Generando ${a.nombre} — Subbox ${sb.letter}...`;
+            await new Promise(r=>setTimeout(r,5));
+
+            const {svg, width:sw, height:sh}=buildSubboxSvgForPdf(sb, slots);
+            let imgData;
+            try{ imgData=await svgToDataUrl(svg, sw, sh); }
+            catch(e){ console.warn('SVG failed',sb.letter,e); continue; }
+
+            const availW=cellW-cellPad*2;
+            const availH=cellH-cellPad*2;
+            const ratio=sh/sw;
+            let imgW=availW, imgH=imgW*ratio;
+            if(imgH>availH){ imgH=availH; imgW=imgH/ratio; }
+            const imgX=cellX+cellPad+(availW-imgW)/2;
+            const imgY=cellY+cellPad+(availH-imgH)/2;
+
+            pdf.addImage(imgData,'PNG',imgX,imgY,imgW,imgH);
+          }
+          addFooter(pdf,'Subbox  |  '+a.nombre);
+        }
+      }
+    }
+    else if(sec.id.startsWith('artist-')){
+      const aid=sec.id.replace('artist-','');
+      const a=S.artists.find(x=>String(x.id)===String(aid));
+      console.log('Generating CH List for:', a?.nombre, 'channels:', a?.channels?.length);
+      if(!a) continue;
+      try{
+
+      const isSimpleMode = window._pdfMode === 'simple';
+      const orient = isSimpleMode ? 'p' : 'l';
+      const pw = isSimpleMode ? 210 : 297;
+      const ph = isSimpleMode ? 297 : 210;
+
+      pdf.addPage([pw,ph], orient);
+
+      // Header
+      pdf.setFillColor(...BG); pdf.rect(0,0,pw,ph,'F');
+      pdf.setFillColor(...ACCENT); pdf.rect(0,0,pw,4,'F');
+      pdf.setFillColor(...GRAY1); pdf.rect(0,4,pw,14,'F');
+
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(10); pdf.setTextColor(...ACCENT);
+      pdf.text(a.nombre, M, 13);
+      pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY3);
+      pdf.text(safe(S.event.nombre||'',40), pw/2, 10, {align:'center'});
+      pdf.setFontSize(9); pdf.setFont('helvetica','bold'); pdf.setTextColor(...BLACK);
+      pdf.text(safe(S.event.nombre||'',40), pw/2, 16, {align:'center'});
+      pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY3);
+      pdf.text('Fecha: '+fmtDate(a.fecha||S.event.fecha||''), pw-M, 10, {align:'right'});
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(9); pdf.setTextColor(...BLACK);
+      pdf.text(timeRange(a.inicio,a.fin), pw-M, 16, {align:'right'});
+
+      // Subbox legend
+      let sx=M; const sbY=21;
+      S.subboxes.forEach(sb=>{
+        const [r,g,b]=hexToRgb(sb.color);
+        pdf.setFillColor(r,g,b);
+        pdf.rect(sx, sbY, 5, 4, 'F');
+        pdf.setFont('helvetica','bold'); pdf.setFontSize(7);
+        pdf.setTextColor(255,255,255);
+        pdf.text(sb.letter, sx+1, sbY+3.2);
+        pdf.setTextColor(...GRAY3); pdf.setFontSize(6.5);
+        sx+=9;
+      });
+
+      // Build table body
+      const hasSubs = S.subboxes.length>0;
+      const body = a.channels.map((ch,ci)=>{
+        let subStr='';
+        if(hasSubs){
+          S.subboxes.forEach(sb=>{
+            const v=(ch.subboxes?.[sb.letter]||'').trim();
+            if(v) subStr+=sb.letter+v+' ';
+          });
+        }
+        const pies=[ch.pies?.C?'C':'',ch.pies?.A?'A':'',ch.pies?.P?'P':'',ch.pies?.R?'R':''].filter(Boolean).join('');
+
+        if(isSimpleMode){
+          return [ci+1, subStr.trim()||'', ch.instrumento||'', ch.micro||ch.di||'', ch.phantom?'48V':'', safe(ch.obs||'',30)];
+        }
+        return [ci+1, subStr.trim()||'', ch.instrumento||'', ch.canalStage||'', ch.micro||'', ch.di||'', ch.phantom?'48V':'', pies, safe(ch.obs||'',35)];
+      });
+
+      const cw = pw - M*2;
+
+      if(isSimpleMode){
+        pdf.autoTable({
+          ...AT_STYLES,
+          startY:27,
+          head:[['#','Sub','Instrumento','Micro / DI','48V','Observaciones']],
+          body,
+          columnStyles:{
+            0:{cellWidth:10, halign:'center', textColor:GRAY3},
+            1:{cellWidth:16, fontStyle:'bold'},
+            2:{cellWidth:68, fontStyle:'bold'},
+            3:{cellWidth:48},
+            4:{cellWidth:14, halign:'center'},
+            5:{cellWidth:cw-156},
+          },
+          didParseCell: function(data){
+            if(data.column.index===4 && data.cell.raw==='48V'){
+              data.cell.styles.textColor=ACCENT; data.cell.styles.fontStyle='bold';
+            }
+            // Color sub column
+            if(data.column.index===1 && data.section==='body' && data.cell.raw){
+              const letter=String(data.cell.raw).charAt(0);
+              const sb=S.subboxes.find(s=>s.letter===letter);
+              if(sb){ const [r,g,b]=hexToRgb(sb.color); data.cell.styles.textColor=[r,g,b]; data.cell.styles.fontStyle='bold'; }
+            }
+          },
+          margin:{left:M, right:M, bottom:14},
+          pageBreak:'auto',
+        });
+      } else {
+        pdf.autoTable({
+          ...AT_STYLES,
+          startY:27,
+          head:[['#','Sub','Instrumento','CH Stage','Micro','DI','48V','Pies','Observaciones']],
+          body,
+          columnStyles:{
+            0:{cellWidth:8,  halign:'center', textColor:GRAY3},
+            1:{cellWidth:hasSubs?S.subboxes.length*6+4:6, fontStyle:'bold'},
+            2:{cellWidth:52, fontStyle:'bold'},
+            3:{cellWidth:16, halign:'center'},
+            4:{cellWidth:40},
+            5:{cellWidth:14, halign:'center'},
+            6:{cellWidth:12, halign:'center'},
+            7:{cellWidth:12, halign:'center'},
+          },
+          didParseCell: function(data){
+            if(data.column.index===6 && data.cell.raw==='48V'){
+              data.cell.styles.textColor=ACCENT; data.cell.styles.fontStyle='bold';
+            }
+            if(data.column.index===1 && data.section==='body' && data.cell.raw){
+              const letter=String(data.cell.raw).charAt(0);
+              const sb=S.subboxes.find(s=>s.letter===letter);
+              if(sb){ const [r,g,b]=hexToRgb(sb.color); data.cell.styles.textColor=[r,g,b]; data.cell.styles.fontStyle='bold'; }
+            }
+          },
+          margin:{left:M, right:M, bottom:14},
+        });
+      }
+
+      // Summary bar
+      const fy=pdf.lastAutoTable.finalY+2;
+      if(fy<ph-16){
+        pdf.setFillColor(...GRAY1); pdf.rect(M,fy,pw-M*2,6,'F');
+        pdf.setFont('helvetica','normal'); pdf.setFontSize(6.5); pdf.setTextColor(...GRAY3);
+        const mics=a.channels.filter(ch=>ch.micro).length;
+        const diM=a.channels.filter(ch=>ch.di==='M').length;
+        const diST=a.channels.filter(ch=>ch.di==='ST').length;
+        const ph2=a.channels.filter(ch=>ch.phantom).length;
+        const piC=a.channels.filter(ch=>ch.pies?.C).length;
+        const piA=a.channels.filter(ch=>ch.pies?.A).length;
+        pdf.text(
+          `Canales: ${a.channels.length}   Con micro: ${mics}   DI Mono: ${diM}   DI Stereo: ${diST}   48V: ${ph2}   Pie Corto: ${piC}   Pie Alto: ${piA}`,
+          M+3, fy+4
+        );
+      }
+      addFooter(pdf,'CH List  |  '+a.nombre, pw, ph);
+      } catch(err){ console.error('Error generating CH List for '+a.nombre+':', err); }
+    }
+  }
+
+  // Save
+  const fname=(S.event.nombre||'Stage_Master').replace(/[^a-zA-Z0-9_\- ]/g,'').trim()+'_CH_List.pdf';
+  pdf.save(fname);
   prog.style.display='none';
+  btn.disabled=false;
   closePdfModal();
 }
 
