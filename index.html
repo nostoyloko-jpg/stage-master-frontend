@@ -1666,6 +1666,12 @@ function migrateA(a){
   a.channels.forEach(ch=>{
     if(!ch.subboxes||typeof ch.subboxes!=='object')ch.subboxes={};
     if(ch.subbox!==undefined&&!ch.subboxes.A){ch.subboxes.A=ch.subbox||'';delete ch.subbox;}
+    // Clean garbage subbox values (true, false, single letters) left by old rider IA
+    Object.keys(ch.subboxes).forEach(k=>{
+      const v=ch.subboxes[k];
+      if(v===true||v===false||v===null||v===undefined) ch.subboxes[k]='';
+      else if(typeof v==='string'&&(v==='true'||v==='false'||/^[a-zA-Z]$/.test(v.trim()))) ch.subboxes[k]='';
+    });
     if(!ch.pies||typeof ch.pies!=='object')ch.pies={};
     PIE_DEFS.forEach(p=>{if(ch.pies[p.key]===undefined)ch.pies[p.key]=false;});
     if(ch.instrumento===undefined)ch.instrumento='';
