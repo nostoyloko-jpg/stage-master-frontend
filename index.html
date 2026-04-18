@@ -696,7 +696,7 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
 <script>
 if('serviceWorker' in navigator){
   const swCode=`
-self.addEventListener('install',e=>e.waitUntil(caches.open('chlist-v1').then(c=>c.addAll([location.href]))));
+self.addEventListener('install',e=>e.waitUntil(caches.open('sm-v3').then(c=>c.addAll([location.href]))));
 self.addEventListener('fetch',e=>e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request))));
 `;
   const blob=new Blob([swCode],{type:'application/javascript'});
@@ -8018,7 +8018,7 @@ function clearApiKey(){
 }
 
 function getApiKeyStorageMode(){
-  try{ if(sessionStorage.getItem('sm_anthropic_key')) return 'session'; }catch(e){}
+  try{ if(sessionStorage.getItem('sm.key_session')||sessionStorage.getItem('sm_anthropic_key')) return 'session'; }catch(e){}
   return 'local';
 }
 
@@ -8049,7 +8049,7 @@ function updApiKeyStatus(){
   if(key){
     if(existsRow) existsRow.style.display='flex';
     if(inputRow) inputRow.style.display='none';
-    const isSession=!!(() => { try{ return sessionStorage.getItem('sm_anthropic_key'); }catch(e){ return false; } })();
+    const isSession=!!(() => { try{ return sessionStorage.getItem('sm.key_session')||sessionStorage.getItem('sm_anthropic_key'); }catch(e){ return false; } })();
     if(existsLabel){
       if(key.startsWith('sk-ant-')){
         existsLabel.textContent = isSession
