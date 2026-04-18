@@ -723,6 +723,7 @@ self.addEventListener('fetch',e=>e.respondWith(caches.match(e.request).then(r=>r
     <div class="nav-item"        onclick="nav('summary')" id="nav-summary"><span class="dot"></span>Resumen microfonía</div>
     <div class="nav-item"        onclick="nav('rchlist')" id="nav-rchlist"><span class="dot"></span>Resumen CH List</div>
     <div class="nav-item"        onclick="nav('sblist')"  id="nav-sblist"><span class="dot"></span>Resumen Subbox</div>
+    <div class="nav-item"        onclick="nav('loadout')" id="nav-loadout"><span class="dot"></span>Load Out</div>
   </div>
   <div class="nav-section nav-artist-list">
     <div class="nav-label">Artistas</div>
@@ -1185,6 +1186,20 @@ self.addEventListener('fetch',e=>e.respondWith(caches.match(e.request).then(r=>r
     </div>
   </div>
 
+  <!-- LOAD OUT -->
+  <div class="page" id="page-loadout">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Load Out</span>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <span style="font-size:9px;color:var(--text3)">Spare = max(1, ⌈N×0.15⌉)</span>
+          <button class="btn btn-sm" onclick="renderLoadOut()" title="Recalcular">↻</button>
+        </div>
+      </div>
+      <div id="loadout-container" style="overflow-x:auto"></div>
+    </div>
+  </div>
+
 
   <!-- QUICK SEARCH -->
   <div class="pdf-modal-overlay" id="search-modal" style="align-items:flex-start;padding-top:80px">
@@ -1223,6 +1238,16 @@ self.addEventListener('fetch',e=>e.respondWith(caches.match(e.request).then(r=>r
             <div>
               <div style="font-size:11px;font-weight:600;color:var(--text)">Extendido</div>
               <div style="font-size:9px;color:var(--text3)">Horizontal · Subboxes, pies, obs</div>
+            </div>
+          </label>
+        </div>
+        <!-- Color print toggle -->
+        <div style="margin-bottom:12px;padding:8px 10px;background:var(--bg3);border-radius:var(--radius);border:1px solid var(--border);display:flex;align-items:center;gap:8px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;flex:1">
+            <input type="checkbox" id="pdf-color-mode" style="accent-color:var(--accent)" onchange="window._pdfColor=this.checked" checked>
+            <div>
+              <div style="font-size:11px;font-weight:600;color:var(--text)">Impresión en color</div>
+              <div style="font-size:9px;color:var(--text3)">Subboxes con color · Desactiva para B/N con zebra</div>
             </div>
           </label>
         </div>
@@ -1738,7 +1763,7 @@ function nav(page,aid){
   curPage=page;curAid=aid||null;
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
-  const pm={config:'page-config',orden:'page-orden',summary:'page-summary',rchlist:'page-rchlist',sblist:'page-sblist'};
+  const pm={config:'page-config',orden:'page-orden',summary:'page-summary',rchlist:'page-rchlist',sblist:'page-sblist',loadout:'page-loadout'};
   if(pm[page]){document.getElementById(pm[page]).classList.add('active');document.getElementById('nav-'+page)?.classList.add('active');}
   else if(page==='artist'){document.getElementById('page-artist-'+aid)?.classList.add('active');document.getElementById('nav-artist-'+aid)?.classList.add('active');}
   const titles={config:'Configuración',orden:'Orden del día',summary:'Resumen microfonía',rchlist:'Resumen CH List'};
@@ -1755,6 +1780,7 @@ function nav(page,aid){
   if(page==='summary')renderSummary();
   if(page==='rchlist')renderRchList();
   if(page==='sblist')renderSbList();
+  if(page==='loadout')renderLoadOut();
   closeSidebar();
 }
 function openSidebar(){
@@ -2058,6 +2084,7 @@ function buildArtistPage(a){
       <td><input type="text" class="cs-inp" value="${esc(ch.canalStage||'')}" placeholder="—" oninput="updCh(${a.id},${i},'canalStage',this.value)" title="Canal Stage" data-row="${i}" data-col="cs"><span class="print-val">${esc(ch.canalStage||'')}</span></td>
       <td style="position:relative">
         <select class="micro-sel micro-inp" style="${isLinkedFromPrev?'opacity:.5':''}" onchange="updCh(${a.id},${i},'micro',this.value)" data-row="${i}" data-col="micro">${mOpts}</select>
+        ${ch.phantom?`<span title="48V phantom" style="position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:50%;background:var(--amber,#f59e0b);opacity:.9;pointer-events:none"></span>`:''}
         <span class="print-val">${esc(ch.micro||'')}</span>
       </td>
       <td class="di-col" style="width:54px;vertical-align:top">
@@ -4061,6 +4088,110 @@ function renderSubboxSVG(sb, slots, ownerArtistId){
   return out;
 }
 
+// ── LOAD OUT ──────────────────────────────────────────────────────────
+function renderLoadOut(){
+  const cont=document.getElementById('loadout-container');
+  if(!cont)return;
+  if(!S.artists.length){cont.innerHTML=`<div class="empty-state">Sin artistas</div>`;return;}
+
+  function spare(n,rate){return Math.max(1,Math.ceil(n*rate));}
+
+  // Load saved checkbox state
+  let loState={};
+  try{const saved=localStorage.getItem('sm.loadout');if(saved)loState=JSON.parse(saved);}catch(e){}
+  function saveLoState(){try{localStorage.setItem('sm.loadout',JSON.stringify(loState));}catch(e){}}
+
+  // Count mics
+  const micCount={};
+  S.artists.forEach(a=>a.channels.forEach(ch=>{
+    if(ch.micro){const k=ch.micro;micCount[k]=(micCount[k]||0)+1;}
+  }));
+
+  // Count DIs
+  let diM=0,diST=0;
+  S.artists.forEach(a=>a.channels.forEach(ch=>{
+    if(ch.di==="M")diM++;else if(ch.di==="ST")diST++;
+  }));
+
+  // Count pies
+  let piC=0,piA=0,piP=0,piR=0;
+  S.artists.forEach(a=>a.channels.forEach(ch=>{
+    if(ch.pies?.C)piC++;if(ch.pies?.A)piA++;
+    if(ch.pies?.P)piP++;if(ch.pies?.R)piR++;
+  }));
+
+  // Subboxes used
+  const sbUsed=new Set();
+  S.artists.forEach(a=>a.channels.forEach(ch=>{
+    if(ch.subboxes)Object.entries(ch.subboxes).forEach(([k,v])=>{if(v&&v.trim())sbUsed.add(k);});
+  }));
+
+  // Build rows
+  const rows=[];
+  Object.entries(micCount).sort((a,b)=>b[1]-a[1]).forEach(([mic,n])=>{
+    const sp=spare(n,0.15);rows.push({cat:"MICRO",item:mic,need:n,spare:sp,total:n+sp});
+  });
+  if(diM>0){const sp=spare(diM,0.15);rows.push({cat:"DI",item:"DI Mono",need:diM,spare:sp,total:diM+sp});}
+  if(diST>0){const sp=spare(diST,0.15);rows.push({cat:"DI",item:"DI Stereo",need:diST,spare:sp,total:diST+sp});}
+  [{l:"Pie Corto",n:piC},{l:"Pie Alto",n:piA},{l:"Pie Pinza",n:piP},{l:"Pie Recto",n:piR}]
+    .filter(x=>x.n>0).forEach(({l,n})=>{
+      const sp=spare(n,0.25);rows.push({cat:"PIE",item:l,need:n,spare:sp,total:n+sp});
+    });
+  [...sbUsed].sort().forEach(letter=>{
+    rows.push({cat:"SUBBOX",item:"Subbox "+letter+" (manguera)",need:1,spare:"—",total:1});
+  });
+
+  const catColor={MICRO:"var(--blue,#4fc3f7)",DI:"var(--green,#1de9b6)",PIE:"var(--amber,#f59e0b)",SUBBOX:"var(--accent)"};
+  const catBg={MICRO:"rgba(79,195,247,0.08)",DI:"rgba(29,233,182,0.08)",PIE:"rgba(245,158,11,0.08)",SUBBOX:"rgba(233,69,96,0.08)"};
+
+  let html=`<table class="lineup-table" style="width:100%;min-width:560px">
+    <thead><tr>
+      <th style="width:70px">Categoria</th>
+      <th>Elemento</th>
+      <th style="width:50px;text-align:center">Need</th>
+      <th style="width:50px;text-align:center;color:var(--accent)">Spare</th>
+      <th style="width:50px;text-align:center;font-weight:800">Total</th>
+      <th style="width:80px;text-align:center">Load In</th>
+      <th style="width:80px;text-align:center">Load Out</th>
+    </tr></thead><tbody>`;
+
+  rows.forEach((r)=>{
+    const key=r.cat+"_"+r.item.replace(/[^a-zA-Z0-9]/g,"_");
+    const inC=loState[key+"_in"]||false;
+    const outC=loState[key+"_out"]||false;
+    const mismatch=inC&&!outC;
+    const rowBg=mismatch?"background:rgba(233,69,96,0.18);outline:2px solid var(--accent);outline-offset:-2px":"background:"+( catBg[r.cat]||"");
+    const warn=mismatch?`<span style="color:var(--accent);font-weight:900;margin-left:6px" title="Posible elemento en escenario">&#9888;</span>`:"";
+    html+=`<tr style="${rowBg}">
+      <td style="font-size:9px;letter-spacing:1px;font-weight:700;color:${catColor[r.cat]||"var(--text3)"}">${r.cat}</td>
+      <td style="font-weight:500">${esc(r.item)}${warn}</td>
+      <td style="text-align:center;color:var(--text2)">${r.need}</td>
+      <td style="text-align:center;color:var(--accent);font-weight:700">${r.spare}</td>
+      <td style="text-align:center;font-weight:800;font-size:13px">${r.total}</td>
+      <td style="text-align:center"><input type="checkbox" ${inC?"checked":""}
+        style="width:18px;height:18px;accent-color:var(--green,#1de9b6);cursor:pointer"
+        onchange="window._updLo('${key}','in',this.checked)"></td>
+      <td style="text-align:center"><input type="checkbox" ${outC?"checked":""}
+        style="width:18px;height:18px;accent-color:var(--accent);cursor:pointer"
+        onchange="window._updLo('${key}','out',this.checked)"></td>
+    </tr>`;
+  });
+
+  html+=`</tbody></table>
+  <div style="display:flex;align-items:center;gap:12px;font-size:10px;color:var(--text3);padding:10px 16px;border-top:1px solid var(--border)">
+    <span>Spare micros/DI = max(1,N×15%) · pies = max(1,N×25%)</span>
+    <span style="color:var(--accent)">&#9888; = Load In marcado sin Load Out</span>
+    <button class="btn btn-sm" onclick="window._clearLo()" style="margin-left:auto;font-size:10px">Limpiar checks</button>
+  </div>`;
+
+  cont.innerHTML=html;
+
+  window._updLo=function(key,type,val){
+    loState[key+"_"+type]=val;saveLoState();renderLoadOut();
+  };
+  window._clearLo=function(){loState={};saveLoState();renderLoadOut();};
+}
+
 // ── EXPORT ──
 
 // ══════════════════════════════════════════════
@@ -5917,8 +6048,20 @@ function hexToRgb(hex){
   return [r,g,b];
 }
 
+function cleanForPDF(str){
+  return String(str||'')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'') // strip accents: á->a, é->e etc.
+    .replace(/→/g,'->').replace(/←/g,'<-')
+    .replace(/©/g,'(c)').replace(/®/g,'(R)')
+    .replace(/·/g,'·')   // keep middle dot — jsPDF handles it
+    .replace(/[""]/g,'"').replace(/['']/g,"'")
+    .replace(/–/g,'-').replace(/—/g,'--')
+    .replace(/…/g,'...')
+    .trim();
+}
+
 function safe(s,max){
-  const str=String(s||'');
+  const str=cleanForPDF(s);
   return str.length>max?str.slice(0,max-1)+'...':str;
 }
 
@@ -6018,6 +6161,7 @@ function getPdfSections(){
   const sections=[
     {id:'orden',    label:'Orden del día',        sub:'Lineup y timeline',       pageId:'page-orden',   checked:true},
     {id:'summary',  label:'Resumen microfonía',   sub:'Totales y desglose',      pageId:'page-summary', checked:true},
+    {id:'loadout',  label:'Load Out',             sub:'Material + spares',       pageId:'',             checked:true},
     {id:'rchlist',  label:'Resumen CH List',      sub:'Todos los artistas',      pageId:'page-rchlist', checked:true},
     {id:'sblist',   label:'Resumen Subbox',       sub:'Diagrama visual',         pageId:'page-sblist',  checked:true},
   ];
@@ -6035,13 +6179,15 @@ function getPdfSections(){
 }
 
 let _pdfSections=[];
-window._pdfMode = 'extended'; // default
+window._pdfMode = 'extended';
+window._pdfColor = true;
 
 function openPdfModal(){
   _pdfSections=getPdfSections();
-  // Sync radio to current mode
   const radio = document.getElementById('pdf-mode-'+window._pdfMode);
   if(radio) radio.checked = true;
+  const colorCb = document.getElementById('pdf-color-mode');
+  if(colorCb) colorCb.checked = window._pdfColor;
   const list=document.getElementById('pdf-sections-list');
   list.innerHTML=_pdfSections.map((s,i)=>`
     <div class="pdf-section-row" onclick="togglePdfSection(${i})">
@@ -6104,12 +6250,14 @@ async function runPdfExport(){
   function _dur(ini,fin){ const i=_t2m(ini),f=_t2m(fin); if(i===null||f===null)return null; let d=f-i; if(d<=0)d+=1440; return d; }
   function _fmtDur(d){ if(!d||d<=0)return '--'; return Math.floor(d/60)+'h'+(d%60?String(d%60).padStart(2,'0')+'min':''); }
 
+  const isColorMode = window._pdfColor !== false;
+
   const BG    = [255,255,255];
   const BLACK = [0,0,0];
-  const GRAY1 = [240,240,240]; // table header bg
+  const GRAY1 = [235,235,235]; // table header bg
   const GRAY2 = [250,250,250]; // alternate row
   const GRAY3 = [100,100,100]; // secondary text
-  const ACCENT= [180,0,30];    // red accent — visible when printed
+  const ACCENT= isColorMode ? [180,0,30] : [30,30,30]; // red in color, near-black in B/N
 
   // Arrow as plain text — no unicode issues
   const ARR = '->';
@@ -6158,7 +6306,7 @@ async function runPdfExport(){
   pdf.setFillColor(...BG); pdf.rect(0,0,PW,PH,'F');
   pdf.setFillColor(...ACCENT); pdf.rect(0,0,4,PH,'F');
   pdf.setFont('helvetica','bold'); pdf.setFontSize(28); pdf.setTextColor(...BLACK);
-  pdf.text(S.event.nombre||'Channel List', 14, 45);
+  pdf.text(cleanForPDF(S.event.nombre||'Channel List'), 14, 45);
   pdf.setFont('helvetica','normal'); pdf.setFontSize(12); pdf.setTextColor(...GRAY3);
   const subParts=[S.event.lugar, S.event.fecha?fmtDate(S.event.fecha):''].filter(Boolean);
   pdf.text(subParts.join('   |   '), 14, 56);
@@ -6170,7 +6318,7 @@ async function runPdfExport(){
     pdf.setFont('helvetica','bold'); pdf.setTextColor(...ACCENT);
     pdf.text(String(i+1).padStart(2,'0'), 14, ay);
     pdf.setTextColor(...BLACK);
-    pdf.text(a.nombre, 26, ay);
+    pdf.text(cleanForPDF(a.nombre), 26, ay);
     pdf.setFont('helvetica','normal'); pdf.setTextColor(...GRAY3);
     pdf.text(`${a.canales} ch   ${timeRange(a.inicio,a.fin)}`, PW-14, ay, {align:'right'});
     ay+=9; if(ay>PH-20) ay=72;
@@ -6208,7 +6356,7 @@ async function runPdfExport(){
           }
           return [
             i+1,
-            a.nombre,
+            cleanForPDF(a.nombre),
             fmtDate(a.fecha||''),
             timeRange(a.inicio,a.fin),
             durStr,
@@ -6230,7 +6378,7 @@ async function runPdfExport(){
           const scDurStr=_fmtDur(_dur(a.soundcheckInicio,a.soundcheckFin));
           return [
             i+1,
-            a.nombre,
+            cleanForPDF(a.nombre),
             fmtDate(a.soundcheckFecha||a.fecha||''),
             a.soundcheckCall||'--',
             timeRange(a.soundcheckInicio,a.soundcheckFin),
@@ -6353,6 +6501,148 @@ async function runPdfExport(){
       addFooter(pdf,'Resumen Microfonía');
     }
 
+    // ── LOAD OUT ──
+    else if(sec.id==='loadout'){
+      pdf.addPage([210,297],'p'); // portrait — checklist format
+      pdf.setFillColor(...BG); pdf.rect(0,0,210,297,'F');
+      pdf.setFillColor(...ACCENT); pdf.rect(0,0,210,4,'F');
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(...BLACK);
+      pdf.text('LOAD OUT  |  '+safe(S.event.nombre||'',40), M, 13);
+      pdf.setFont('helvetica','normal'); pdf.setFontSize(7); pdf.setTextColor(...GRAY3);
+      pdf.text('Spare = max(1, ceil(necesidad × 0.15))', M, 19);
+
+      // ── Spare formula ──
+      function spare(n){ return Math.max(1, Math.ceil(n*0.15)); }
+
+      // ── 1. Count mics across all artists ──
+      const micCount={};
+      S.artists.forEach(a=>{
+        a.channels.forEach(ch=>{
+          if(ch.micro){
+            const k=cleanForPDF(ch.micro);
+            micCount[k]=(micCount[k]||0)+1;
+          }
+        });
+      });
+
+      // ── 2. Count DIs ──
+      let diMono=0, diStereo=0;
+      S.artists.forEach(a=>{
+        a.channels.forEach(ch=>{
+          if(ch.di==='M') diMono++;
+          else if(ch.di==='ST') diStereo++;
+        });
+      });
+
+      // ── 3. Count stands/pies ──
+      let pieC=0, pieA=0, pieP=0, pieR=0;
+      S.artists.forEach(a=>{
+        a.channels.forEach(ch=>{
+          if(ch.pies?.C) pieC++;
+          if(ch.pies?.A) pieA++;
+          if(ch.pies?.P) pieP++;
+          if(ch.pies?.R) pieR++;
+        });
+      });
+
+      // ── 4. Subboxes used — count unique letters across all artists ──
+      const sbUsed=new Set();
+      S.artists.forEach(a=>{
+        a.channels.forEach(ch=>{
+          if(ch.subboxes) Object.entries(ch.subboxes).forEach(([k,v])=>{ if(v&&v.trim()) sbUsed.add(k); });
+        });
+      });
+      // Also count fixed subboxes from sbConfig
+      if(S.sbConfig?.fixedLines) S.sbConfig.fixedLines.forEach(l=>{ if(l.sbLetter) sbUsed.add(l.sbLetter); });
+
+      // Count mangueras — one per subbox used
+      const mAnguerasNeeded=sbUsed.size;
+
+      // ── Build rows ──
+      const rows=[];
+
+      // Mics
+      Object.entries(micCount).sort((a,b)=>b[1]-a[1]).forEach(([mic,n])=>{
+        const sp=spare(n);
+        rows.push(['MICRO', mic, n, sp, n+sp, '', '']);
+      });
+
+      // DIs
+      if(diMono>0){
+        const sp=spare(diMono);
+        rows.push(['DI', 'DI Mono', diMono, sp, diMono+sp, '', '']);
+      }
+      if(diStereo>0){
+        const sp=spare(diStereo);
+        rows.push(['DI', 'DI Stereo', diStereo, sp, diStereo+sp, '', '']);
+      }
+
+      // Stands — higher margin (25%) as they break more
+      const standsData=[
+        ['Pie Corto (C)', pieC], ['Pie Alto (A)', pieA],
+        ['Pie Pinza (P)', pieP], ['Pie Recto (R)', pieR],
+      ];
+      standsData.filter(([,n])=>n>0).forEach(([label,n])=>{
+        const sp=Math.max(1, Math.ceil(n*0.25));
+        rows.push(['PIE', label, n, sp, n+sp, '', '']);
+      });
+
+      // Subboxes — one row per subbox used, no spare
+      [...sbUsed].sort().forEach(letter=>{
+        const sb=S.subboxes.find(s=>s.letter===letter);
+        const name=sb?`Subbox ${sb.letter} (manguera)`:`Subbox ${letter} (manguera)`;
+        rows.push(['SUBBOX', name, 1, '—', 1, '', '']);
+      });
+
+      pdf.autoTable({
+        ...AT_STYLES,
+        startY:23,
+        head:[['Cat.','Elemento','Need','Spare','Total','Load In','Load Out']],
+        body: rows,
+        headStyles:{...AT_STYLES.headStyles, fillColor:[50,50,50], textColor:[255,255,255]},
+        columnStyles:{
+          0:{cellWidth:18, fontStyle:'bold', textColor:GRAY3, fontSize:7},
+          1:{cellWidth:72, fontStyle:'bold'},
+          2:{cellWidth:14, halign:'center'},
+          3:{cellWidth:14, halign:'center', textColor:ACCENT},
+          4:{cellWidth:16, halign:'center', fontStyle:'bold'},
+          5:{cellWidth:18, halign:'center', fontSize:10},
+          6:{cellWidth:18, halign:'center', fontSize:10},
+        },
+        didParseCell: function(data){
+          if(data.section!=='body') return;
+          // Highlight spare column
+          if(data.column.index===3 && data.cell.raw>0){
+            data.cell.styles.textColor=ACCENT;
+            data.cell.styles.fontStyle='bold';
+          }
+          // Total column bold
+          if(data.column.index===4){
+            data.cell.styles.fontStyle='bold';
+          }
+          // Subbox rows — warn (no spare)
+          if(data.column.index===3 && data.cell.raw===0){
+            data.cell.styles.textColor=GRAY3;
+          }
+          // Category color coding
+          if(data.column.index===0){
+            const cat=String(data.cell.raw);
+            if(cat==='MICRO') data.cell.styles.fillColor=[245,245,255];
+            if(cat==='DI') data.cell.styles.fillColor=[245,255,245];
+            if(cat==='PIE') data.cell.styles.fillColor=[255,250,240];
+            if(cat==='SUBBOX') data.cell.styles.fillColor=[255,245,245];
+          }
+        },
+        margin:{left:M, right:M, bottom:14},
+      });
+
+      // Legend
+      const ly=pdf.lastAutoTable.finalY+6;
+      pdf.setFont('helvetica','normal'); pdf.setFontSize(7); pdf.setTextColor(...GRAY3);
+      pdf.text('Spare = max(1, ceil(N × 0.15)) para micros/DIs  ·  max(1, ceil(N × 0.25)) para pies  ·  Subboxes sin spare recomendado', M, ly);
+      addFooter(pdf,'Load Out', 210, 297);
+    }
+
     // ── 4. RESUMEN CH LIST ──
     else if(sec.id==='rchlist'){
       pdf.addPage([PW,PH],'l');
@@ -6461,7 +6751,7 @@ async function runPdfExport(){
 
           // Artist name header
           pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(...ACCENT);
-          pdf.text(a.nombre, M, 15);
+          pdf.text(cleanForPDF(a.nombre), M, 15);
           pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY3);
           pdf.text(safe(S.event.nombre||'',50), PW-M, 15, {align:'right'});
           if(pageStart>0){
@@ -6497,7 +6787,7 @@ async function runPdfExport(){
 
             pdf.addImage(imgData,'PNG',imgX,imgY,imgW,imgH);
           }
-          addFooter(pdf,'Subbox  |  '+a.nombre);
+          addFooter(pdf,'Subbox  |  '+cleanForPDF(a.nombre));
         }
       }
     }
@@ -6514,35 +6804,7 @@ async function runPdfExport(){
       const ph = isSimpleMode ? 297 : 210;
 
       pdf.addPage([pw,ph], orient);
-
-      // Header
-      pdf.setFillColor(...BG); pdf.rect(0,0,pw,ph,'F');
-      pdf.setFillColor(...ACCENT); pdf.rect(0,0,pw,4,'F');
-      pdf.setFillColor(...GRAY1); pdf.rect(0,4,pw,14,'F');
-
-      pdf.setFont('helvetica','bold'); pdf.setFontSize(10); pdf.setTextColor(...ACCENT);
-      pdf.text(a.nombre, M, 13);
-      pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY3);
-      pdf.text(safe(S.event.nombre||'',40), pw/2, 10, {align:'center'});
-      pdf.setFontSize(9); pdf.setFont('helvetica','bold'); pdf.setTextColor(...BLACK);
-      pdf.text(safe(S.event.nombre||'',40), pw/2, 16, {align:'center'});
-      pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY3);
-      pdf.text('Fecha: '+fmtDate(a.fecha||S.event.fecha||''), pw-M, 10, {align:'right'});
-      pdf.setFont('helvetica','bold'); pdf.setFontSize(9); pdf.setTextColor(...BLACK);
-      pdf.text(timeRange(a.inicio,a.fin), pw-M, 16, {align:'right'});
-
-      // Subbox legend
-      let sx=M; const sbY=21;
-      S.subboxes.forEach(sb=>{
-        const [r,g,b]=hexToRgb(sb.color);
-        pdf.setFillColor(r,g,b);
-        pdf.rect(sx, sbY, 5, 4, 'F');
-        pdf.setFont('helvetica','bold'); pdf.setFontSize(7);
-        pdf.setTextColor(255,255,255);
-        pdf.text(sb.letter, sx+1, sbY+3.2);
-        pdf.setTextColor(...GRAY3); pdf.setFontSize(6.5);
-        sx+=9;
-      });
+      drawArtistHeader();
 
       // Build table body
       const hasSubs = S.subboxes.length>0;
@@ -6564,10 +6826,104 @@ async function runPdfExport(){
 
       const cw = pw - M*2;
 
+      // Build zebra map: each unique subbox letter gets odd/even index for B/N striping
+      const zebraMap={};
+      let zebraIdx=0;
+      body.forEach(row=>{
+        const sub=String(row[1]||'');
+        const letter=sub.charAt(0);
+        if(letter && zebraMap[letter]===undefined) zebraMap[letter]=zebraIdx++;
+      });
+
+      // Shared subbox cell styler
+      function styleSubCell(data, subColIdx, instrColIdx, phantomColIdx){
+        if(data.section!=='body') return;
+        const sub=String(body[data.row.index]?.[1]||'');
+        const letter=sub.charAt(0);
+        const sb=letter?S.subboxes.find(s=>s.letter===letter):null;
+
+        // Phantom indicator
+        if(data.column.index===phantomColIdx && data.cell.raw==='48V'){
+          data.cell.styles.textColor=ACCENT; data.cell.styles.fontStyle='bold';
+        }
+
+        // Sub column — letter in subbox color (color mode) or dark gray (B/N)
+        if(data.column.index===subColIdx && data.cell.raw && sb){
+          data.cell.styles.fontStyle='bold';
+          if(isColorMode){
+            const [r,g,b]=hexToRgb(sb.color);
+            data.cell.styles.textColor=[r,g,b];
+          } else {
+            data.cell.styles.textColor=[50,50,50];
+          }
+        }
+
+        if(isColorMode){
+          // COLOR MODE: instrument cell bg tinted with subbox color at 20%
+          if(data.column.index===instrColIdx && sb){
+            const [r,g,b]=hexToRgb(sb.color);
+            data.cell.styles.fillColor=[
+              Math.round(255-(255-r)*0.20),
+              Math.round(255-(255-g)*0.20),
+              Math.round(255-(255-b)*0.20),
+            ];
+          }
+        } else {
+          // Phantom: tint micro cell amber if 48V
+        if(data.column.index===phantomColIdx-1 && data.section==='body'){
+          const row=body[data.row.index];
+          // Check phantom flag — it's in the phantom column
+          const phantomVal=row?.[phantomColIdx];
+          if(phantomVal==='48V'){
+            if(isColorMode){
+              data.cell.styles.fillColor=[255,248,225]; // warm amber tint
+            } else {
+              data.cell.styles.fillColor=[235,235,235];
+            }
+          }
+        }
+          if(sb && zebraMap[letter]!==undefined){
+            data.cell.styles.fillColor = zebraMap[letter]%2===1 ? [225,225,225] : [255,255,255];
+          } else {
+            data.cell.styles.fillColor = [255,255,255];
+          }
+        }
+      }
+
+      // Disable alternateRowStyles in B/N mode — zebra handles it
+      const tableStyles = {...AT_STYLES, alternateRowStyles: isColorMode ? AT_STYLES.alternateRowStyles : {}};
+
+      // Function to draw artist header on each page
+      function drawArtistHeader(){
+        // Only draw header bar elements, not the full white background
+        pdf.setFillColor(...ACCENT); pdf.rect(0,0,pw,4,'F');
+        pdf.setFillColor(...GRAY1); pdf.rect(0,4,pw,14,'F');
+        pdf.setFont('helvetica','bold'); pdf.setFontSize(10); pdf.setTextColor(...ACCENT);
+        pdf.text(cleanForPDF(a.nombre), M, 13);
+        pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY3);
+        pdf.text(safe(S.event.nombre||'',40), pw/2, 10, {align:'center'});
+        pdf.setFontSize(9); pdf.setFont('helvetica','bold'); pdf.setTextColor(...BLACK);
+        pdf.text(safe(S.event.nombre||'',40), pw/2, 16, {align:'center'});
+        pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY3);
+        pdf.text('Fecha: '+fmtDate(a.fecha||S.event.fecha||''), pw-M, 10, {align:'right'});
+        pdf.setFont('helvetica','bold'); pdf.setFontSize(9); pdf.setTextColor(...BLACK);
+        pdf.text(timeRange(a.inicio,a.fin), pw-M, 16, {align:'right'});
+        // Subbox legend
+        let sx=M; const sbY=21;
+        S.subboxes.forEach(sb=>{
+          const [r,g,b]=isColorMode ? hexToRgb(sb.color) : [80,80,80];
+          pdf.setFillColor(r,g,b); pdf.rect(sx,sbY,5,4,'F');
+          pdf.setFont('helvetica','bold'); pdf.setFontSize(7); pdf.setTextColor(255,255,255);
+          pdf.text(sb.letter, sx+1, sbY+3.2);
+          sx+=9;
+        });
+        pdf.setTextColor(...BLACK);
+      }
+
       if(isSimpleMode){
         pdf.autoTable({
-          ...AT_STYLES,
-          startY:27,
+          ...tableStyles,
+          startY:30,
           head:[['#','Sub','Instrumento','Micro / DI','48V','Observaciones']],
           body,
           columnStyles:{
@@ -6578,24 +6934,15 @@ async function runPdfExport(){
             4:{cellWidth:14, halign:'center'},
             5:{cellWidth:cw-156},
           },
-          didParseCell: function(data){
-            if(data.column.index===4 && data.cell.raw==='48V'){
-              data.cell.styles.textColor=ACCENT; data.cell.styles.fontStyle='bold';
-            }
-            // Color sub column
-            if(data.column.index===1 && data.section==='body' && data.cell.raw){
-              const letter=String(data.cell.raw).charAt(0);
-              const sb=S.subboxes.find(s=>s.letter===letter);
-              if(sb){ const [r,g,b]=hexToRgb(sb.color); data.cell.styles.textColor=[r,g,b]; data.cell.styles.fontStyle='bold'; }
-            }
-          },
-          margin:{left:M, right:M, bottom:14},
+          didParseCell: function(data){ styleSubCell(data, 1, 2, 4); },
+          didDrawPage: function(){ drawArtistHeader(); },
+          margin:{left:M, right:M, bottom:14, top:30},
           pageBreak:'auto',
         });
       } else {
         pdf.autoTable({
-          ...AT_STYLES,
-          startY:27,
+          ...tableStyles,
+          startY:30,
           head:[['#','Sub','Instrumento','CH Stage','Micro','DI','48V','Pies','Observaciones']],
           body,
           columnStyles:{
@@ -6608,17 +6955,9 @@ async function runPdfExport(){
             6:{cellWidth:12, halign:'center'},
             7:{cellWidth:12, halign:'center'},
           },
-          didParseCell: function(data){
-            if(data.column.index===6 && data.cell.raw==='48V'){
-              data.cell.styles.textColor=ACCENT; data.cell.styles.fontStyle='bold';
-            }
-            if(data.column.index===1 && data.section==='body' && data.cell.raw){
-              const letter=String(data.cell.raw).charAt(0);
-              const sb=S.subboxes.find(s=>s.letter===letter);
-              if(sb){ const [r,g,b]=hexToRgb(sb.color); data.cell.styles.textColor=[r,g,b]; data.cell.styles.fontStyle='bold'; }
-            }
-          },
-          margin:{left:M, right:M, bottom:14},
+          didParseCell: function(data){ styleSubCell(data, 1, 2, 6); },
+          didDrawPage: function(){ drawArtistHeader(); },
+          margin:{left:M, right:M, bottom:14, top:30},
         });
       }
 
@@ -6638,7 +6977,7 @@ async function runPdfExport(){
           M+3, fy+4
         );
       }
-      addFooter(pdf,'CH List  |  '+a.nombre, pw, ph);
+      addFooter(pdf,'CH List  |  '+cleanForPDF(a.nombre), pw, ph);
       } catch(err){ console.error('Error generating CH List for '+a.nombre+':', err); }
     }
   }
