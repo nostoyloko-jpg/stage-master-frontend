@@ -2234,9 +2234,12 @@ document.addEventListener('keydown',function(e){
 // ── CHANNEL DATA ──
 function validarPatch(aid, idx, sbLetter, valor){
   const val=String(valor||'').trim();
-  if(!val) return null; // empty is fine
+  if(!val||val==='false') return null; // empty is fine
 
-  // Format check
+  // Ignore/clean legacy boolean or single-letter garbage values
+  if(val==='true'||/^[a-zA-Z]$/.test(val)) return `Valor inválido "${val}" — limpiando automáticamente`;
+
+  // Format check — must be a positive integer
   const num=parseInt(val);
   if(isNaN(num)||num<1) return `Formato inválido — escribe solo el número (ej: 3)`;
 
@@ -6320,8 +6323,14 @@ async function runPdfExport(){
     S.subboxes.forEach(sb=>{
       const seen={};
       a.channels.forEach((ch,ci)=>{
-        const val=String(ch.subboxes?.[sb.letter]||'').trim();
-        if(!val) return;
+        const raw=ch.subboxes?.[sb.letter];
+        const val=String(raw||'').trim();
+        if(!val||val==='false') return;
+        // Auto-clean legacy boolean/single-letter garbage silently
+        if(val==='true'||/^[a-zA-Z]$/.test(val)){
+          ch.subboxes[sb.letter]=''; // clean it
+          return;
+        }
         const num=parseInt(val);
         if(isNaN(num)||num<1){
           patchErrors.push(`"${a.nombre}" — Canal ${ci+1}: valor inválido "${val}" en Subbox ${sb.letter}`);
