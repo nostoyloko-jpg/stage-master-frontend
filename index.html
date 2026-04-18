@@ -788,6 +788,7 @@ self.addEventListener('fetch',e=>e.respondWith(caches.match(e.request).then(r=>r
         <button class="mode-toggle-btn" id="mode-std-btn" onclick="setMode('simple')">Simple</button>
         <button class="mode-toggle-btn active" id="mode-exp-btn" onclick="setMode('extended')">Extendido</button>
       </div>
+      <button class="btn-icon" onclick="openTour()" title="Ayuda rápida" style="font-size:13px">?</button>
       <button class="btn-icon" onclick="toggleTheme()" id="theme-btn" title="Cambiar tema">☀</button>
     </div>
   </div>
@@ -4294,6 +4295,99 @@ function renderLoadOut(){
     if(!confirm('¿Limpiar todos los valores de Load In / Load Out?\nEsta acción no se puede deshacer.')) return;
     loState={};saveLoState();renderLoadOut();
   };
+}
+
+// ── TOUR / AYUDA RÁPIDA ───────────────────────────────────────────────
+const TOUR_STEPS = [
+  {
+    title: '👋 Bienvenido a Stage Master',
+    body: `<p style="font-size:13px;line-height:1.7;color:var(--text)">Stage Master es una herramienta para técnicos de sonido en festivales. Te permite gestionar el <b>Channel List</b> de cada artista, asignar subboxes, exportar PDFs y mucho más.</p>
+    <p style="font-size:12px;color:var(--text2);margin-top:10px">Este tour te guía por las funciones principales en menos de 2 minutos.</p>`
+  },
+  {
+    title: '1. Configura el evento',
+    body: `<p style="font-size:13px;line-height:1.7;color:var(--text)">Empieza en <b>Configuración</b> — rellena el nombre del festival, fechas, técnico y ajusta el número de subboxes y conectores por caja.</p>
+    <p style="font-size:12px;color:var(--text2);margin-top:8px">💡 Los subboxes representan las cajas de conexiones físicas del escenario (medusas). El número de conectores por fila es la capacidad de cada caja.</p>`
+  },
+  {
+    title: '2. Añade artistas',
+    body: `<p style="font-size:13px;line-height:1.7;color:var(--text)">Pulsa <b>+ Añadir artista</b> en Configuración. Pon nombre, horario y número de canales. Puedes subir el rider técnico con el botón <b>✦ IA</b> para que la app rellene el CH List automáticamente.</p>
+    <p style="font-size:12px;color:var(--text2);margin-top:8px">💡 El rider IA acepta PDF, imagen, CSV o Excel. Siempre revisa el resultado antes de confirmar.</p>`
+  },
+  {
+    title: '3. Rellena el Channel List',
+    body: `<p style="font-size:13px;line-height:1.7;color:var(--text)">Cada artista tiene su tabla de canales. Las columnas de <b>Subbox</b> (A, B, C...) son donde asignas a qué conector físico va cada canal.</p>
+    <p style="font-size:12px;color:var(--text2);margin-top:8px">⚠️ <b>Patch físicamente imposible:</b> Si escribes un número de conector que no existe en la caja, o asignas el mismo conector a dos canales, la celda se pondrá en rojo y el artista mostrará un <span style="color:var(--accent);font-weight:900">⚠</span> en el menú lateral.</p>
+    <p style="font-size:12px;color:var(--text2);margin-top:6px">Puedes asignar conectores pinchando directamente en el <b>Resumen Subbox</b> — es más visual y evita errores.</p>`
+  },
+  {
+    title: '4. Exportar PDF',
+    body: `<p style="font-size:13px;line-height:1.7;color:var(--text)">El botón <b>⬇ Exportar PDF</b> genera el dossier completo: orden del día, resúmenes, CH Lists y diagramas de subboxes.</p>
+    <p style="font-size:12px;color:var(--text2);margin-top:8px">Opciones de exportación:<br>
+    • <b>Simple</b> — vertical, solo lo esencial para imprimir y llevar al escenario<br>
+    • <b>Extendido</b> — horizontal, con subboxes, pies y observaciones<br>
+    • <b>B/N</b> — desactiva colores para impresora sin tinta color</p>
+    <p style="font-size:12px;color:var(--accent);margin-top:8px">⚠️ Si hay errores de patch, el PDF te avisará antes de generar — puedes corregirlos o exportar igualmente.</p>`
+  },
+  {
+    title: '5. Load Out',
+    body: `<p style="font-size:13px;line-height:1.7;color:var(--text)">La sección <b>Load Out</b> calcula automáticamente el material necesario (micros, DIs, pies, cajetines) sumando todos los artistas.</p>
+    <p style="font-size:12px;color:var(--text2);margin-top:8px">Incluye spares calculados con la fórmula: <b>max(1, ⌈N × 15%⌉)</b> — siempre llevas al menos 1 de repuesto.<br><br>
+    Rellena <b>Load In</b> con el stock real que tienes y <b>Load Out</b> con lo que recuperas. Si Load Out &lt; Load In la fila se pone en rojo: <span style="color:var(--accent)">algo se quedó en el escenario.</span></p>`
+  },
+  {
+    title: '✓ Listo para el bolo',
+    body: `<p style="font-size:13px;line-height:1.7;color:var(--text)">Eso es todo lo esencial. Algunos atajos útiles:</p>
+    <div style="font-size:12px;color:var(--text2);margin-top:8px;display:grid;grid-template-columns:auto 1fr;gap:4px 12px">
+      <b>⌘S</b><span>Guardar</span>
+      <b>⌘Z</b><span>Deshacer</span>
+      <b>⌘F</b><span>Buscar canal</span>
+      <b>⌘N</b><span>Nuevo proyecto</span>
+    </div>
+    <p style="font-size:11px;color:var(--text3);margin-top:14px">Desarrollado por Luis Anton · lag.sound@gmail.com</p>`
+  },
+];
+
+let _tourStep=0;
+function openTour(step=0){
+  _tourStep=step;
+  document.getElementById('tour-modal').classList.add('open');
+  renderTourStep();
+}
+function closeTour(){
+  document.getElementById('tour-modal').classList.remove('open');
+}
+function tourNav(dir){
+  _tourStep=Math.max(0,Math.min(TOUR_STEPS.length-1,_tourStep+dir));
+  renderTourStep();
+}
+function renderTourStep(){
+  const s=TOUR_STEPS[_tourStep];
+  document.getElementById('tour-step-label').textContent=`GUÍA RÁPIDA  ${_tourStep+1}/${TOUR_STEPS.length}`;
+  document.getElementById('tour-body').innerHTML=`<div style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);font-weight:700;margin-bottom:10px">${s.title}</div>${s.body}`;
+  // Dots
+  document.getElementById('tour-dots').innerHTML=TOUR_STEPS.map((_,i)=>
+    `<span style="width:7px;height:7px;border-radius:50%;background:${i===_tourStep?'var(--accent)':'var(--border2)'};display:inline-block;cursor:pointer" onclick="openTour(${i})"></span>`
+  ).join('');
+  // Buttons
+  document.getElementById('tour-prev').style.opacity=_tourStep===0?'0.3':'1';
+  document.getElementById('tour-prev').disabled=_tourStep===0;
+  const nextBtn=document.getElementById('tour-next');
+  if(_tourStep===TOUR_STEPS.length-1){
+    nextBtn.textContent='¡Entendido!';
+    nextBtn.onclick=closeTour;
+  } else {
+    nextBtn.textContent='Siguiente →';
+    nextBtn.onclick=()=>tourNav(1);
+  }
+}
+
+// Show tour on first visit
+if(!localStorage.getItem('sm.tour_seen')){
+  window.addEventListener('load',()=>setTimeout(()=>{
+    openTour(0);
+    localStorage.setItem('sm.tour_seen','1');
+  },800));
 }
 
 // ── EXPORT ──
@@ -8810,6 +8904,22 @@ function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/<
     </div>
     <div class="sb-picker-body" id="slot-ch-picker-body" style="max-height:65vh;overflow-y:auto"></div>
   </div></div>
+
+<!-- TOUR MODAL -->
+<div class="pdf-modal-overlay" id="tour-modal">
+  <div class="pdf-modal" style="max-width:520px;width:94%">
+    <div class="pdf-modal-head">
+      <span class="pdf-modal-title" id="tour-step-label">GUÍA RÁPIDA</span>
+      <button class="btn-icon" onclick="closeTour()" style="font-size:12px">✕</button>
+    </div>
+    <div id="tour-body" style="padding:20px 24px;min-height:180px"></div>
+    <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px">
+      <div id="tour-dots" style="display:flex;gap:5px;flex:1"></div>
+      <button class="btn btn-sm" id="tour-prev" onclick="tourNav(-1)">← Anterior</button>
+      <button class="btn btn-sm btn-accent" id="tour-next" onclick="tourNav(1)">Siguiente →</button>
+    </div>
+  </div>
+</div>
 
 </body>
 </html>
