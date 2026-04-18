@@ -4157,37 +4157,46 @@ function renderLoadOut(){
 
   rows.forEach((r)=>{
     const key=r.cat+"_"+r.item.replace(/[^a-zA-Z0-9]/g,"_");
-    const inC=loState[key+"_in"]||false;
-    const outC=loState[key+"_out"]||false;
-    const mismatch=inC&&!outC;
-    const rowBg=mismatch?"background:rgba(233,69,96,0.18);outline:2px solid var(--accent);outline-offset:-2px":"background:"+( catBg[r.cat]||"");
-    const warn=mismatch?`<span style="color:var(--accent);font-weight:900;margin-left:6px" title="Posible elemento en escenario">&#9888;</span>`:"";
+    const inVal=loState[key+"_in"]||'';
+    const outVal=loState[key+"_out"]||'';
+    const inNum=parseInt(inVal)||0;
+    const outNum=parseInt(outVal)||0;
+    // Mismatch: load out recorded but less than load in
+    const mismatch=inNum>0&&outNum>0&&outNum<inNum;
+    const lost=mismatch?inNum-outNum:0;
+    const rowBg=mismatch?"background:rgba(233,69,96,0.18);outline:2px solid var(--accent);outline-offset:-2px":`background:${catBg[r.cat]||''}`;
+    const warn=mismatch?`<span style="color:var(--accent);font-weight:900;margin-left:6px" title="Faltan ${lost} unidades">&#9888; -${lost}</span>`:'';
+    const inpStyle="width:54px;text-align:center;font-size:12px;font-weight:600;background:var(--inp-bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);padding:3px 4px;font-family:var(--font)";
     html+=`<tr style="${rowBg}">
       <td style="font-size:9px;letter-spacing:1px;font-weight:700;color:${catColor[r.cat]||"var(--text3)"}">${r.cat}</td>
       <td style="font-weight:500">${esc(r.item)}${warn}</td>
       <td style="text-align:center;color:var(--text2)">${r.need}</td>
       <td style="text-align:center;color:var(--accent);font-weight:700">${r.spare}</td>
       <td style="text-align:center;font-weight:800;font-size:13px">${r.total}</td>
-      <td style="text-align:center"><input type="checkbox" ${inC?"checked":""}
-        style="width:18px;height:18px;accent-color:var(--green,#1de9b6);cursor:pointer"
-        onchange="window._updLo('${key}','in',this.checked)"></td>
-      <td style="text-align:center"><input type="checkbox" ${outC?"checked":""}
-        style="width:18px;height:18px;accent-color:var(--accent);cursor:pointer"
-        onchange="window._updLo('${key}','out',this.checked)"></td>
+      <td style="text-align:center"><input type="number" min="0" value="${esc(inVal)}" placeholder="—"
+        style="${inpStyle};border-color:${inVal?'var(--green,#1de9b6)':'var(--border2)'}"
+        oninput="window._updLo('${key}','in',this.value)"></td>
+      <td style="text-align:center"><input type="number" min="0" value="${esc(outVal)}" placeholder="—"
+        style="${inpStyle};border-color:${outVal?(mismatch?'var(--accent)':'var(--green,#1de9b6)'):'var(--border2)'}"
+        oninput="window._updLo('${key}','out',this.value)"></td>
     </tr>`;
   });
 
   html+=`</tbody></table>
   <div style="display:flex;align-items:center;gap:12px;font-size:10px;color:var(--text3);padding:10px 16px;border-top:1px solid var(--border)">
     <span>Spare micros/DI = max(1,N×15%) · pies = max(1,N×25%)</span>
-    <span style="color:var(--accent)">&#9888; = Load In marcado sin Load Out</span>
-    <button class="btn btn-sm" onclick="window._clearLo()" style="margin-left:auto;font-size:10px">Limpiar checks</button>
+    <span style="color:var(--accent)">&#9888; = diferencia entre Load In y Load Out</span>
+    <button class="btn btn-sm" onclick="window._clearLo()" style="margin-left:auto;font-size:10px">Limpiar</button>
   </div>`;
 
   cont.innerHTML=html;
 
   window._updLo=function(key,type,val){
-    loState[key+"_"+type]=val;saveLoState();renderLoadOut();
+    loState[key+"_"+type]=val;
+    saveLoState();
+    // Debounce re-render to avoid flickering while typing
+    clearTimeout(window._loTimer);
+    window._loTimer=setTimeout(()=>renderLoadOut(),400);
   };
   window._clearLo=function(){loState={};saveLoState();renderLoadOut();};
 }
