@@ -2020,13 +2020,51 @@ function delA(id){
 }
 
 // ── ARTIST NAV ──
+function getPatchErrorsForArtist(a){
+  const cfg=S.sbConfig||{rows:2,cols:8};
+  const maxSlot=(cfg.rows||2)*(cfg.cols||8);
+  const errors=[];
+  S.subboxes.forEach(sb=>{
+    const seen={};
+    a.channels.forEach((ch,ci)=>{
+      const val=String(ch.subboxes?.[sb.letter]||'').trim();
+      if(!val||val==='false'||val==='true'||/^[a-zA-Z]$/.test(val)) return;
+      const num=parseInt(val);
+      if(isNaN(num)||num<1) return;
+      if(num>maxSlot) errors.push(`${sb.letter}${val} no existe`);
+      else if(seen[val]!==undefined) errors.push(`${sb.letter}${val} duplicado (ch${seen[val]+1} y ch${ci+1})`);
+      else seen[val]=ci;
+    });
+  });
+  return errors;
+}
+
 function renderArtistNav(){
-  document.getElementById('artist-nav').innerHTML=S.artists.map(a=>`
+  document.getElementById('artist-nav').innerHTML=S.artists.map(a=>{
+    const errs=getPatchErrorsForArtist(a);
+    const warn=errs.length?`<span title="${errs.join('\n')}" style="color:var(--accent);font-size:11px;font-weight:900;margin-left:2px">⚠</span>`:'';
+    return `
     <div class="nav-item" onclick="nav('artist',${a.id})" id="nav-artist-${a.id}">
       <span class="dot"></span>
       <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(a.nombre||'—')}</span>
+      ${warn}
       <span class="ch-badge">${a.canales}ch</span>
-    </div>`).join('');
+    </div>`;
+  }).join('');
+
+  // Global warning in topbar if any artist has errors
+  const totalErrs=S.artists.reduce((n,a)=>n+getPatchErrorsForArtist(a).length,0);
+  let globalWarn=document.getElementById('patch-global-warn');
+  if(!globalWarn){
+    globalWarn=document.createElement('span');
+    globalWarn.id='patch-global-warn';
+    globalWarn.style.cssText='color:var(--accent);font-size:11px;font-weight:900;cursor:pointer';
+    globalWarn.title='Hay errores de patch — revisa los artistas con ⚠';
+    globalWarn.onclick=()=>document.getElementById('sidebar').classList.add('open');
+    document.getElementById('tbar-actions')?.prepend(globalWarn);
+  }
+  globalWarn.textContent=totalErrs?`⚠ ${totalErrs}`:'';
+  globalWarn.style.display=totalErrs?'inline':'none';
 }
 
 // ── ARTIST PAGES ──
@@ -2300,6 +2338,7 @@ function updCh(aid,idx,field,value){
     if(row)row.checked=ch.phantom;
   }
   updBadges(a);updChSum(a);debouncedSave();debouncedSnapshot();
+  if(field.startsWith('sb_')) setTimeout(renderArtistNav,0);
 }
 function showTLTooltip(ev,name,start,end,dur,notes){
   const tt=document.getElementById('tl-tooltip');if(!tt)return;
@@ -4157,7 +4196,7 @@ function renderLoadOut(){
   // Count mics
   const micCount={};
   S.artists.forEach(a=>a.channels.forEach(ch=>{
-    if(ch.micro){const k=normalizeGearName(ch.micro);micCount[k]=(micCount[k]||0)+1;}
+    if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));micCount[k]=(micCount[k]||0)+1;}
   }));
 
   // Count DIs
@@ -4251,7 +4290,10 @@ function renderLoadOut(){
     clearTimeout(window._loTimer);
     window._loTimer=setTimeout(()=>renderLoadOut(),400);
   };
-  window._clearLo=function(){loState={};saveLoState();renderLoadOut();};
+  window._clearLo=function(){
+    if(!confirm('¿Limpiar todos los valores de Load In / Load Out?\nEsta acción no se puede deshacer.')) return;
+    loState={};saveLoState();renderLoadOut();
+  };
 }
 
 // ── EXPORT ──
@@ -6538,12 +6580,12 @@ async function runPdfExport(){
       // Build normalized mic count across all channels
       const allMicNorm={};
       S.artists.forEach(a=>a.channels.forEach(ch=>{
-        if(ch.micro){const k=normalizeGearName(ch.micro);allMicNorm[k]=(allMicNorm[k]||{});S.artists.forEach((a2,i)=>{
+        if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));allMicNorm[k]=(allMicNorm[k]||{});S.artists.forEach((a2,i)=>{
           if(!allMicNorm[k][i]) allMicNorm[k][i]=0;
         });}
       }));
       S.artists.forEach((a,ai)=>a.channels.forEach(ch=>{
-        if(ch.micro){const k=normalizeGearName(ch.micro);if(!allMicNorm[k])allMicNorm[k]={};allMicNorm[k][ai]=(allMicNorm[k][ai]||0)+1;}
+        if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));if(!allMicNorm[k])allMicNorm[k]={};allMicNorm[k][ai]=(allMicNorm[k][ai]||0)+1;}
       }));
       Object.entries(allMicNorm).sort((a,b)=>{
         const ta=Object.values(a[1]).reduce((s,n)=>s+n,0);
