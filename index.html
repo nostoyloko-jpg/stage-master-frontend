@@ -4472,7 +4472,7 @@ async function renderStagePlan(aid){
           <div id="plan-canvas-inner" style="position:absolute;transform-origin:0 0;width:100%;height:100%">
             <div id="plan-bg" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
               ${plan.pdfUrl
-                ? `<canvas id="plan-pdf-canvas" style="max-width:100%;max-height:100%;display:block"></canvas>`
+                ? `<iframe src="${plan.pdfUrl}" style="width:100%;height:100%;border:none;pointer-events:none" id="plan-pdf-iframe"></iframe>`
                 : `<div style="color:var(--text3);font-size:13px;text-align:center;padding:60px 40px">
                     <div style="font-size:48px;margin-bottom:16px">🗺</div>
                     <div>Sube un PDF del plano de escenario</div>
@@ -4490,7 +4490,6 @@ async function renderStagePlan(aid){
 
   applyPlanTransform();
   renderPlanElements(aid);
-  if(plan.pdfUrl) setTimeout(()=>renderPlanPdf(plan.pdfUrl),100);
 }
 
 function setPlanTool(tool,btn){
@@ -4693,9 +4692,12 @@ async function uploadStagePlan(aid,input){
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({role:'reader',type:'anyone'})
     });
-    const pdfUrl=`https://drive.google.com/uc?export=download&id=${data.id}`;
+    const pdfUrl=`https://drive.google.com/file/d/${data.id}/preview`;
+    const imgUrl=`https://drive.google.com/thumbnail?id=${data.id}&sz=w2000`;
     const plan=getStagePlan(aid);
-    plan.pdfFileId=data.id;plan.pdfUrl=pdfUrl;
+    plan.pdfFileId=data.id;
+    plan.pdfUrl=pdfUrl;
+    plan.imgUrl=imgUrl;
     saveS();
     await renderStagePlan(aid);
   }catch(e){
