@@ -44,6 +44,16 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
 .nav-artist-list{flex:1;overflow-y:auto;}
 .nav-label{font-size:9px;letter-spacing:2px;color:var(--text3);padding:7px 18px 4px;text-transform:uppercase;}
 .nav-item{display:flex;align-items:center;gap:8px;padding:9px 18px;cursor:pointer;color:var(--text2);font-size:13px;transition:background .12s;}
+.nav-sub{padding:5px 18px 5px 28px;font-size:10px;color:var(--text3);letter-spacing:.5px;}
+.nav-sub:hover{background:var(--bg3);color:var(--text2);}
+.nav-sub.active{color:var(--accent);background:rgba(233,69,96,0.08);}
+.plan-canvas-wrap{position:relative;width:100%;background:#1a1e28;border-radius:8px;overflow:hidden;cursor:grab;user-select:none;touch-action:none;}
+.plan-canvas-wrap.panning{cursor:grabbing;}
+.plan-element{position:absolute;transform:translate(-50%,-50%);cursor:move;z-index:10;touch-action:none;}
+.plan-element .pe-label{font-size:10px;font-weight:700;text-align:center;pointer-events:none;text-shadow:0 1px 3px rgba(0,0,0,.8);white-space:nowrap;}
+.plan-toolbar{display:flex;gap:6px;padding:10px 0;flex-wrap:wrap;align-items:center;}
+.plan-tool-btn{padding:5px 10px;border-radius:4px;border:1px solid var(--border2);background:var(--bg3);color:var(--text2);font-size:11px;cursor:pointer;font-family:var(--font);transition:all .12s;}
+.plan-tool-btn:hover,.plan-tool-btn.active{background:var(--accent);color:white;border-color:var(--accent);}
 .nav-item:hover{background:var(--bg3);color:var(--text);}
 .nav-item.active{background:var(--bg4);color:var(--accent);border-right:2px solid var(--accent);}
 .nav-item .dot{width:6px;height:6px;border-radius:50%;background:var(--text3);flex-shrink:0;}
@@ -1781,6 +1791,18 @@ function nav(page,aid){
   const pm={config:'page-config',orden:'page-orden',summary:'page-summary',rchlist:'page-rchlist',sblist:'page-sblist',loadout:'page-loadout'};
   if(pm[page]){document.getElementById(pm[page]).classList.add('active');document.getElementById('nav-'+page)?.classList.add('active');}
   else if(page==='artist'){document.getElementById('page-artist-'+aid)?.classList.add('active');document.getElementById('nav-artist-'+aid)?.classList.add('active');}
+  else if(page==='plan'){
+    // Show plan page for this artist — reuse a single plan page
+    let planPage=document.getElementById('page-plan');
+    if(!planPage){
+      planPage=document.createElement('div');
+      planPage.className='page'; planPage.id='page-plan';
+      document.getElementById('artist-pages').appendChild(planPage);
+    }
+    planPage.classList.add('active');
+    document.getElementById('nav-plan-'+aid)?.classList.add('active');
+    renderStagePlan(aid);
+  }
   const titles={config:'Configuración',orden:'Orden del día',summary:'Resumen microfonía',rchlist:'Resumen CH List'};
   const artist=S.artists.find(a=>a.id===aid);
   document.getElementById('topbar-title').textContent=page==='artist'?(artist?.nombre||'—'):(titles[page]||page);
@@ -2052,12 +2074,18 @@ function renderArtistNav(){
   document.getElementById('artist-nav').innerHTML=S.artists.map(a=>{
     const errs=getPatchErrorsForArtist(a);
     const warn=errs.length?`<span title="${errs.join('\n')}" style="color:var(--accent);font-size:11px;font-weight:900;margin-left:2px">⚠</span>`:'';
+    const hasPlan=!!(a.stagePlan?.pdfFileId||a.stagePlan?.elements?.length);
     return `
     <div class="nav-item" onclick="nav('artist',${a.id})" id="nav-artist-${a.id}">
       <span class="dot"></span>
       <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(a.nombre||'—')}</span>
       ${warn}
       <span class="ch-badge">${a.canales}ch</span>
+    </div>
+    <div class="nav-item nav-sub" onclick="nav('plan',${a.id})" id="nav-plan-${a.id}" style="padding-left:28px;font-size:10px;color:var(--text3)">
+      <span style="margin-right:6px;font-size:10px">🗺</span>
+      <span>Plano</span>
+      ${hasPlan?`<span style="margin-left:auto;width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block"></span>`:''}
     </div>`;
   }).join('');
 
@@ -4305,6 +4333,382 @@ function renderLoadOut(){
   };
 }
 
+// ── TOKEN ACCESS ─────────────────────────────────────────────────────
+const BACKEND_URL = 'https://stage-master-backend-1.onrender.com';
+
+function getSavedToken(){
+  try{ return localStorage.getItem('sm.access_token')||''; }catch(e){ return ''; }
+}
+function saveToken(t){
+  try{ localStorage.setItem('sm.access_token', t); }catch(e){}
+}
+
+async function checkToken(token){
+  try{
+    const res=await fetch(BACKEND_URL+'/api/validate-token',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({token})
+    });
+    const data=await res.json();
+    return data;
+  }catch(e){
+    // If backend is unreachable, allow access with saved token (offline mode)
+    return {ok:true, usuario:'offline', offline:true};
+  }
+}
+
+async function submitToken(){
+  const inp=document.getElementById('token-input');
+  const btn=document.getElementById('token-submit-btn');
+  const errEl=document.getElementById('token-error');
+  const token=(inp.value||'').trim().toUpperCase();
+  if(!token){errEl.textContent='Introduce un código de acceso';errEl.style.display='block';return;}
+
+  btn.textContent='Verificando...'; btn.disabled=true;
+  errEl.style.display='none';
+
+  const result=await checkToken(token);
+  if(result.ok){
+    saveToken(token);
+    document.getElementById('token-modal').style.display='none';
+    if(result.offline){
+      console.info('[TOKEN] Backend offline — using cached token');
+    } else {
+      console.info('[TOKEN] Access granted for:', result.usuario);
+    }
+  } else {
+    errEl.textContent=result.error||'Código no válido';
+    errEl.style.display='block';
+    btn.textContent='Acceder →'; btn.disabled=false;
+    inp.focus(); inp.select();
+  }
+}
+
+async function initTokenGate(){
+  const modal=document.getElementById('token-modal');
+  const saved=getSavedToken();
+  if(!saved){
+    modal.style.display='flex'; return;
+  }
+  // Validate saved token silently
+  const result=await checkToken(saved);
+  if(result.ok){
+    modal.style.display='none';
+  } else {
+    // Token revoked — show modal again
+    localStorage.removeItem('sm.access_token');
+    modal.style.display='flex';
+    const errEl=document.getElementById('token-error');
+    errEl.textContent='Tu acceso ha sido revocado. Contacta con el administrador.';
+    errEl.style.display='block';
+  }
+}
+
+// Patch getApiKey to include token in backend requests
+const _origGetApiKey = getApiKey;
+function getSmToken(){ return getSavedToken(); }
+
+function getSmToken(){ return getSavedToken(); }
+
+// ── STAGE PLAN ────────────────────────────────────────────────────────
+let _planAid=null;
+let _planTool='select';
+let _planDragging=null;
+let _planPan={x:0,y:0,startX:0,startY:0,active:false};
+let _planScale=1;
+
+function getStagePlan(aid){
+  const a=S.artists.find(x=>x.id===aid);
+  if(!a) return null;
+  if(!a.stagePlan) a.stagePlan={pdfFileId:null,pdfUrl:null,elements:[],pan:{x:0,y:0},scale:1};
+  return a.stagePlan;
+}
+
+async function renderStagePlan(aid){
+  _planAid=aid;
+  const a=S.artists.find(x=>x.id===aid);
+  if(!a) return;
+  const plan=getStagePlan(aid);
+  _planPan={x:(plan.pan?.x||0),y:(plan.pan?.y||0),active:false,startX:0,startY:0};
+  _planScale=plan.scale||1;
+
+  const page=document.getElementById('page-plan');
+  page.innerHTML=`
+    <div class="card" style="height:100%;display:flex;flex-direction:column">
+      <div class="card-header" style="flex-shrink:0">
+        <span class="card-title">🗺 Plano — ${esc(a.nombre)}</span>
+        <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+          <button class="btn btn-sm" onclick="nav('artist',${aid})">← CH List</button>
+          <label class="btn btn-sm" style="cursor:pointer" title="Subir PDF del plano">
+            📄 Subir plano
+            <input type="file" accept=".pdf,image/*" style="display:none" onchange="uploadStagePlan(${aid},this)">
+          </label>
+          ${plan.pdfUrl?`<button class="btn btn-sm" onclick="removeStagePlanPdf(${aid})" title="Quitar plano" style="color:var(--text3)">🗑 Plano</button>`:''}
+          <button class="btn btn-sm" onclick="planZoom(${aid},0.2)">＋</button>
+          <button class="btn btn-sm" onclick="planZoom(${aid},-0.2)">－</button>
+          <button class="btn btn-sm" onclick="planResetView(${aid})">⌂</button>
+        </div>
+      </div>
+      <div class="plan-toolbar" style="padding:8px 16px;flex-shrink:0;border-bottom:1px solid var(--border)">
+        <span style="font-size:10px;color:var(--text3);margin-right:4px">Colocar:</span>
+        ${S.subboxes.map(sb=>`<button class="plan-tool-btn" onclick="setPlanTool('sb_${sb.letter}',this)" style="border-color:${sb.color};color:${sb.color}">📦 ${sb.letter}</button>`).join('')}
+        <button class="plan-tool-btn" onclick="setPlanTool('corriente',this)">⚡ Corriente</button>
+        <button class="plan-tool-btn" onclick="setPlanTool('nota',this)">📝 Nota</button>
+        <button class="plan-tool-btn active" id="plan-select-btn" onclick="setPlanTool('select',this)" style="margin-left:8px">↖ Mover</button>
+        <button class="btn btn-sm" onclick="clearAllPlanElements(${aid})" style="margin-left:auto;color:var(--text3)">🗑 Limpiar</button>
+      </div>
+      <div style="flex:1;overflow:hidden;position:relative;padding:0">
+        <div id="plan-canvas-wrap" class="plan-canvas-wrap"
+          style="width:100%;height:calc(100vh - 200px);min-height:400px"
+          onmousedown="planMouseDown(event,${aid})"
+          onmousemove="planMouseMove(event,${aid})"
+          onmouseup="planMouseUp(event,${aid})"
+          onmouseleave="planMouseUp(event,${aid})"
+          onwheel="planWheel(event,${aid})"
+          ontouchstart="planTouchStart(event,${aid})"
+          ontouchmove="planTouchMove(event,${aid})"
+          ontouchend="planTouchEnd(event,${aid})">
+          <div id="plan-canvas-inner" style="position:absolute;transform-origin:0 0;width:100%;height:100%">
+            <div id="plan-bg" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
+              ${plan.pdfUrl
+                ? `<canvas id="plan-pdf-canvas" style="max-width:100%;max-height:100%;display:block"></canvas>`
+                : `<div style="color:var(--text3);font-size:13px;text-align:center;padding:60px 40px">
+                    <div style="font-size:48px;margin-bottom:16px">🗺</div>
+                    <div>Sube un PDF del plano de escenario</div>
+                    <div style="font-size:11px;margin-top:8px">o empieza a colocar elementos directamente</div>
+                   </div>`}
+            </div>
+            <div id="plan-elements"></div>
+          </div>
+        </div>
+      </div>
+      <div style="padding:6px 16px;font-size:10px;color:var(--text3);border-top:1px solid var(--border)">
+        Clic para colocar · Doble clic para editar · Clic derecho para eliminar · Rueda para zoom · Arrastrar para mover
+      </div>
+    </div>`;
+
+  applyPlanTransform();
+  renderPlanElements(aid);
+  if(plan.pdfUrl) setTimeout(()=>renderPlanPdf(plan.pdfUrl),100);
+}
+
+function setPlanTool(tool,btn){
+  _planTool=tool;
+  document.querySelectorAll('.plan-tool-btn').forEach(b=>b.classList.remove('active'));
+  btn?.classList.add('active');
+}
+
+function applyPlanTransform(){
+  const inner=document.getElementById('plan-canvas-inner');
+  if(inner) inner.style.transform=`translate(${_planPan.x}px,${_planPan.y}px) scale(${_planScale})`;
+}
+
+function planZoom(aid,delta){
+  _planScale=Math.max(0.2,Math.min(5,_planScale+delta));
+  applyPlanTransform(); savePlanView(aid);
+}
+
+function planResetView(aid){
+  _planPan={x:0,y:0,active:false,startX:0,startY:0};
+  _planScale=1; applyPlanTransform(); savePlanView(aid);
+}
+
+function savePlanView(aid){
+  const plan=getStagePlan(aid);
+  if(plan){plan.pan={x:_planPan.x,y:_planPan.y};plan.scale=_planScale;saveS();}
+}
+
+function planMouseDown(e,aid){
+  const isCanvas=e.target.id==='plan-canvas-wrap'||e.target.id==='plan-canvas-inner'||e.target.id==='plan-bg'||e.target.id==='plan-elements'||e.target.tagName==='CANVAS';
+  if(isCanvas){
+    if(_planTool==='select'){
+      _planPan.active=true;_planPan.startX=e.clientX-_planPan.x;_planPan.startY=e.clientY-_planPan.y;
+      document.getElementById('plan-canvas-wrap')?.classList.add('panning');
+    } else {
+      const wrap=document.getElementById('plan-canvas-wrap');
+      const rect=wrap.getBoundingClientRect();
+      const x=(e.clientX-rect.left-_planPan.x)/_planScale;
+      const y=(e.clientY-rect.top-_planPan.y)/_planScale;
+      placePlanElement(aid,_planTool,x,y);
+    }
+  } else if(e.target.closest('.plan-element')&&_planTool==='select'){
+    const el=e.target.closest('.plan-element');
+    _planDragging={el,id:el.dataset.eid,startX:e.clientX,startY:e.clientY,origX:parseFloat(el.style.left),origY:parseFloat(el.style.top)};
+    e.stopPropagation();
+  }
+}
+
+function planMouseMove(e,aid){
+  if(_planPan.active&&_planTool==='select'){
+    _planPan.x=e.clientX-_planPan.startX;_planPan.y=e.clientY-_planPan.startY;
+    applyPlanTransform();
+  }
+  if(_planDragging){
+    const dx=(e.clientX-_planDragging.startX)/_planScale;
+    const dy=(e.clientY-_planDragging.startY)/_planScale;
+    _planDragging.el.style.left=(_planDragging.origX+dx)+'px';
+    _planDragging.el.style.top=(_planDragging.origY+dy)+'px';
+  }
+}
+
+function planMouseUp(e,aid){
+  if(_planPan.active){
+    _planPan.active=false;savePlanView(aid);
+    document.getElementById('plan-canvas-wrap')?.classList.remove('panning');
+  }
+  if(_planDragging){
+    const plan=getStagePlan(aid);
+    const elem=plan?.elements.find(el=>el.id===_planDragging.id);
+    if(elem){elem.x=parseFloat(_planDragging.el.style.left);elem.y=parseFloat(_planDragging.el.style.top);saveS();}
+    _planDragging=null;
+  }
+}
+
+function planWheel(e,aid){
+  e.preventDefault();
+  planZoom(aid,e.deltaY>0?-0.15:0.15);
+}
+
+let _touch2Start=null;
+function planTouchStart(e,aid){
+  if(e.touches.length===1&&_planTool==='select'){
+    const t=e.touches[0];
+    _planPan.active=true;_planPan.startX=t.clientX-_planPan.x;_planPan.startY=t.clientY-_planPan.y;
+  } else if(e.touches.length===2){
+    _touch2Start=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+  }
+}
+function planTouchMove(e,aid){
+  e.preventDefault();
+  if(e.touches.length===1&&_planPan.active){
+    const t=e.touches[0];
+    _planPan.x=t.clientX-_planPan.startX;_planPan.y=t.clientY-_planPan.startY;
+    applyPlanTransform();
+  } else if(e.touches.length===2&&_touch2Start){
+    const dist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+    _planScale=Math.max(0.2,Math.min(5,_planScale+(dist-_touch2Start)*0.005));
+    _touch2Start=dist;applyPlanTransform();
+  }
+}
+function planTouchEnd(e,aid){_planPan.active=false;_touch2Start=null;savePlanView(aid);}
+
+function placePlanElement(aid,type,x,y){
+  const plan=getStagePlan(aid);
+  let label='',color='#ffffff',icon='';
+  if(type.startsWith('sb_')){
+    const letter=type.slice(3);
+    const sb=S.subboxes.find(s=>s.letter===letter);
+    color=sb?.color||'#888';icon='📦';label='SB '+letter;
+  } else if(type==='corriente'){
+    color='#ffb347';icon='⚡';label='Corriente';
+  } else if(type==='nota'){
+    const txt=prompt('Texto de la nota:','');
+    if(!txt) return;
+    color='#4fc3f7';icon='📝';label=txt;
+  }
+  const elem={id:'pe-'+Date.now(),type,x,y,label,color,icon};
+  plan.elements.push(elem);
+  saveS();renderPlanElements(aid);
+}
+
+function renderPlanElements(aid){
+  const plan=getStagePlan(aid);
+  const cont=document.getElementById('plan-elements');
+  if(!cont||!plan) return;
+  cont.innerHTML=plan.elements.map(el=>`
+    <div class="plan-element" data-eid="${el.id}" style="left:${el.x}px;top:${el.y}px"
+      ondblclick="editPlanElement(event,'${el.id}',${aid})"
+      oncontextmenu="deletePlanElement(event,'${el.id}',${aid})">
+      <div style="width:44px;height:44px;border-radius:50%;background:${el.color};border:2.5px solid white;display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 2px 10px rgba(0,0,0,.6)">
+        ${el.icon}
+      </div>
+      <div class="pe-label" style="color:${el.color};margin-top:3px;font-size:10px;font-weight:700;text-align:center;text-shadow:0 1px 3px rgba(0,0,0,.9);white-space:nowrap">${esc(el.label)}</div>
+    </div>`).join('');
+}
+
+function editPlanElement(e,eid,aid){
+  e.stopPropagation();
+  const plan=getStagePlan(aid);
+  const elem=plan?.elements.find(el=>el.id===eid);
+  if(!elem) return;
+  const txt=prompt('Editar etiqueta:',elem.label);
+  if(txt!==null){elem.label=txt;saveS();renderPlanElements(aid);}
+}
+
+function deletePlanElement(e,eid,aid){
+  e.preventDefault();e.stopPropagation();
+  const plan=getStagePlan(aid);
+  if(!plan) return;
+  plan.elements=plan.elements.filter(el=>el.id!==eid);
+  saveS();renderPlanElements(aid);
+}
+
+function clearAllPlanElements(aid){
+  if(!confirm('¿Eliminar todos los elementos del plano?')) return;
+  const plan=getStagePlan(aid);
+  if(plan){plan.elements=[];saveS();renderPlanElements(aid);}
+}
+
+async function renderPlanPdf(url){
+  try{
+    const canvas=document.getElementById('plan-pdf-canvas');
+    if(!canvas) return;
+    const pdfjsLib=window['pdfjs-dist/build/pdf'];
+    if(!pdfjsLib){console.warn('pdf.js not loaded');return;}
+    pdfjsLib.GlobalWorkerOptions.workerSrc=`https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
+    const loadingTask=pdfjsLib.getDocument(url);
+    const pdf=await loadingTask.promise;
+    const page=await pdf.getPage(1);
+    const wrap=document.getElementById('plan-canvas-wrap');
+    const maxW=(wrap?.clientWidth||800)-40;
+    const maxH=(wrap?.clientHeight||600)-40;
+    const vp1=page.getViewport({scale:1});
+    const scale=Math.min(maxW/vp1.width, maxH/vp1.height, 2);
+    const vp=page.getViewport({scale});
+    canvas.width=vp.width;canvas.height=vp.height;
+    await page.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;
+  }catch(e){console.warn('Plan PDF render:',e);}
+}
+
+async function uploadStagePlan(aid,input){
+  const file=input.files[0];
+  if(!file) return;
+  const a=S.artists.find(x=>x.id===aid);
+  if(!a) return;
+  const token=driveGetToken?.();
+  if(!token){alert('Conecta Google Drive primero (Archivo → Abrir desde Drive)');return;}
+
+  try{
+    const folderId=await driveGetOrCreateFolder();
+    const metadata={name:`plano_${(a.nombre||'artista').replace(/[^a-zA-Z0-9]/g,'_')}_${Date.now()}.pdf`,mimeType:file.type||'application/pdf',parents:[folderId]};
+    const form=new FormData();
+    form.append('metadata',new Blob([JSON.stringify(metadata)],{type:'application/json'}));
+    form.append('file',file);
+    const res=await driveRequest('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',{method:'POST',body:form});
+    const data=await res.json();
+    if(!data.id) throw new Error('Upload failed: '+JSON.stringify(data));
+    // Make publicly readable
+    await driveRequest(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({role:'reader',type:'anyone'})
+    });
+    const pdfUrl=`https://drive.google.com/uc?export=download&id=${data.id}`;
+    const plan=getStagePlan(aid);
+    plan.pdfFileId=data.id;plan.pdfUrl=pdfUrl;
+    saveS();
+    await renderStagePlan(aid);
+  }catch(e){
+    alert('Error subiendo plano: '+e.message);
+  }
+}
+
+function removeStagePlanPdf(aid){
+  if(!confirm('¿Quitar el plano PDF? Los elementos colocados se mantendrán.')) return;
+  const plan=getStagePlan(aid);
+  if(plan){plan.pdfFileId=null;plan.pdfUrl=null;saveS();renderStagePlan(aid);}
+}
+
 // ── TOUR / AYUDA RÁPIDA ───────────────────────────────────────────────
 const TOUR_STEPS = [
   {
@@ -4400,6 +4804,9 @@ if(!localStorage.getItem('sm.tour_seen')){
 
 // Back to top button
 window.addEventListener('load',()=>{
+  // Token gate
+  initTokenGate();
+
   const ms=document.getElementById('main-scroll');
   const btn=document.getElementById('back-to-top');
   if(ms&&btn){
@@ -7787,7 +8194,10 @@ async function callBackendRiderParse({ text, fileName = '', micList = '', sbLett
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-sm-token': getSmToken(),
+      },
       body: JSON.stringify({ inputType: 'text', text, fileName, micList, sbLetters }),
       signal: controller.signal,
     });
@@ -8928,6 +9338,30 @@ function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/<
     </div>
     <div class="sb-picker-body" id="slot-ch-picker-body" style="max-height:65vh;overflow-y:auto"></div>
   </div></div>
+
+<!-- TOKEN ACCESS MODAL -->
+<div class="modal-overlay" id="token-modal" style="z-index:20000;background:rgba(0,0,0,0.85)">
+  <div class="modal-box" style="max-width:420px;width:92%">
+    <div style="text-align:center;margin-bottom:16px">
+      <div style="font-size:28px;margin-bottom:8px">⚡</div>
+      <div style="font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);font-weight:700">Stage Master</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">Versión beta — acceso por invitación</div>
+    </div>
+    <div style="margin-bottom:16px">
+      <div style="font-size:11px;color:var(--text2);margin-bottom:8px">Introduce tu código de acceso:</div>
+      <input type="text" id="token-input" placeholder="SM-XXXX-0000"
+        style="width:100%;padding:10px 14px;background:var(--inp-bg);border:1px solid var(--border2);border-radius:var(--radius);color:var(--text);font-family:var(--font);font-size:14px;letter-spacing:2px;text-transform:uppercase;box-sizing:border-box"
+        onkeydown="if(event.key==='Enter')submitToken()">
+      <div id="token-error" style="font-size:11px;color:var(--accent);margin-top:6px;display:none"></div>
+    </div>
+    <button class="btn btn-accent" onclick="submitToken()" id="token-submit-btn" style="width:100%;padding:10px">
+      Acceder →
+    </button>
+    <div style="font-size:10px;color:var(--text3);text-align:center;margin-top:12px">
+      ¿No tienes código? Contacta con <a href="mailto:lag.sound@gmail.com" style="color:var(--accent)">lag.sound@gmail.com</a>
+    </div>
+  </div>
+</div>
 
 <!-- BACK TO TOP -->
 <button id="back-to-top" onclick="document.getElementById('main-scroll').scrollTo({top:0,behavior:'smooth'})"
