@@ -1852,8 +1852,8 @@ function nav(page,aid){
     actEl.innerHTML=syncBadgeHtml+`<span class="badge badge-red">${artist.canales}ch</span><span class="badge badge-green" id="ta-mic">—</span><span class="badge badge-blue" id="ta-di">—</span>${modeToggle}${helpBtn}${iconBtn}`;
     updBadges(artist);
   }else actEl.innerHTML=syncBadgeHtml+modeToggle+helpBtn+iconBtn;
-  // Restore sync badge state
-  updateSyncBadge(_syncEnabled?'ok':'off');
+  // Restore sync badge state after DOM update
+  setTimeout(()=>updateSyncBadge(_syncEnabled?'ok':'off'), 0);
   if(page==='orden'){renderOrden();setTimeout(()=>{applyTimelineView();},50);}
   if(page==='summary')renderSummary();
   if(page==='rchlist')renderRchList();
@@ -4484,7 +4484,7 @@ async function createNewProject(name){
 function updateSyncBadge(status){
   const badge=document.getElementById('sync-badge');
   if(!badge) return;
-  const s={ok:{t:'☁ Sync',c:'var(--green)'},off:{t:'☁ Local',c:'var(--text3)'},err:{t:'☁ Error',c:'var(--accent)'}}[status]||{t:'☁',c:'var(--text3)'};
+  const s={ok:{t:'☁ Sync',c:'var(--green)'},off:{t:'☁',c:'var(--text3)'},err:{t:'☁ Error',c:'var(--accent)'}}[status]||{t:'☁',c:'var(--text3)'};
   badge.textContent=s.t; badge.style.color=s.c; badge.style.borderColor=s.c;
   badge.style.display='inline';
 }
