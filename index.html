@@ -1846,10 +1846,14 @@ function nav(page,aid){
   const modeToggle=`<div class="mode-toggle" title="Cambiar modo de visualización"><button class="mode-toggle-btn${viewMode==='simple'?' active':''}" id="mode-std-btn" onclick="setMode('simple')">Simple</button><button class="mode-toggle-btn${viewMode==='extended'?' active':''}" id="mode-exp-btn" onclick="setMode('extended')">Extendido</button></div>`;
   const iconBtn=`<button class="btn-icon" onclick="toggleTheme()" id="theme-btn" title="Cambiar tema">${theme==='light'?'☾':'☀'}</button>`;
   const actEl=document.getElementById('tbar-actions');
+  const syncBadgeHtml=`<span id="patch-global-warn" style="display:none;color:var(--accent);font-size:11px;font-weight:900;cursor:pointer" onclick="document.getElementById('sidebar').classList.add('open')"></span><span id="sync-badge" style="display:none;font-size:10px;cursor:pointer;padding:2px 7px;border-radius:10px;border:1px solid var(--border2);transition:all .2s" onclick="openSyncModal()">☁</span>`;
+  const helpBtn=`<button class="btn-icon" onclick="openTour()" title="Ayuda rápida" style="font-size:13px">?</button>`;
   if(page==='artist'&&artist){
-    actEl.innerHTML=`<span class="badge badge-red">${artist.canales}ch</span><span class="badge badge-green" id="ta-mic">—</span><span class="badge badge-blue" id="ta-di">—</span>${modeToggle}${iconBtn}`;
+    actEl.innerHTML=syncBadgeHtml+`<span class="badge badge-red">${artist.canales}ch</span><span class="badge badge-green" id="ta-mic">—</span><span class="badge badge-blue" id="ta-di">—</span>${modeToggle}${helpBtn}${iconBtn}`;
     updBadges(artist);
-  }else actEl.innerHTML=modeToggle+iconBtn;
+  }else actEl.innerHTML=syncBadgeHtml+modeToggle+helpBtn+iconBtn;
+  // Restore sync badge state
+  updateSyncBadge(_syncEnabled?'ok':'off');
   if(page==='orden'){renderOrden();setTimeout(()=>{applyTimelineView();},50);}
   if(page==='summary')renderSummary();
   if(page==='rchlist')renderRchList();
