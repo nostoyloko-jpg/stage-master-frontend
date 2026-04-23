@@ -830,6 +830,8 @@ self.addEventListener('fetch',e=>e.respondWith(
       <button class="btn-icon" id="redo-btn" onclick="redo()" title="Rehacer ⌘Y" style="opacity:.3;font-size:14px">↪</button>
     </div>
     <div class="tbar-actions" id="tbar-actions">
+      <span id="patch-global-warn" style="display:none;color:var(--accent);font-size:11px;font-weight:900;cursor:pointer" onclick="document.getElementById('sidebar').classList.add('open')"></span>
+      <span id="sync-badge" style="display:none;font-size:10px;cursor:pointer;padding:2px 7px;border-radius:10px;border:1px solid var(--border2);transition:all .2s" onclick="openSyncModal()">☁</span>
       <div class="mode-toggle" title="Cambiar modo de visualización">
         <button class="mode-toggle-btn" id="mode-std-btn" onclick="setMode('simple')">Simple</button>
         <button class="mode-toggle-btn active" id="mode-exp-btn" onclick="setMode('extended')">Extendido</button>
@@ -2124,19 +2126,13 @@ function renderArtistNav(){
     </div>`;
   }).join('');
 
-  // Global warning in topbar if any artist has errors
+  // Global warning in topbar
   const totalErrs=S.artists.reduce((n,a)=>n+getPatchErrorsForArtist(a).length,0);
-  let globalWarn=document.getElementById('patch-global-warn');
-  if(!globalWarn){
-    globalWarn=document.createElement('span');
-    globalWarn.id='patch-global-warn';
-    globalWarn.style.cssText='color:var(--accent);font-size:11px;font-weight:900;cursor:pointer';
-    globalWarn.title='Hay errores de patch — revisa los artistas con ⚠';
-    globalWarn.onclick=()=>document.getElementById('sidebar').classList.add('open');
-    document.getElementById('tbar-actions')?.prepend(globalWarn);
+  const globalWarn=document.getElementById('patch-global-warn');
+  if(globalWarn){
+    globalWarn.textContent=totalErrs?`⚠ ${totalErrs}`:'';
+    globalWarn.style.display=totalErrs?'inline':'none';
   }
-  globalWarn.textContent=totalErrs?`⚠ ${totalErrs}`:'';
-  globalWarn.style.display=totalErrs?'inline':'none';
 }
 
 // ── ARTIST PAGES ──
@@ -4482,16 +4478,11 @@ async function createNewProject(name){
 }
 
 function updateSyncBadge(status){
-  let badge=document.getElementById('sync-badge');
-  if(!badge){
-    badge=document.createElement('span');
-    badge.id='sync-badge';
-    badge.style.cssText='font-size:10px;cursor:pointer;padding:2px 7px;border-radius:10px;border:1px solid var(--border2);transition:all .2s';
-    badge.onclick=()=>openSyncModal();
-    document.getElementById('tbar-actions')?.prepend(badge);
-  }
+  const badge=document.getElementById('sync-badge');
+  if(!badge) return;
   const s={ok:{t:'☁ Sync',c:'var(--green)'},off:{t:'☁ Local',c:'var(--text3)'},err:{t:'☁ Error',c:'var(--accent)'}}[status]||{t:'☁',c:'var(--text3)'};
   badge.textContent=s.t; badge.style.color=s.c; badge.style.borderColor=s.c;
+  badge.style.display='inline';
 }
 
 async function openSyncModal(){
