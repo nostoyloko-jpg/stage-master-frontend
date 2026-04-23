@@ -829,9 +829,10 @@ self.addEventListener('fetch',e=>e.respondWith(
       <button class="btn-icon" id="undo-btn" onclick="undo()" title="Deshacer ⌘Z" style="opacity:.3;font-size:14px">↩</button>
       <button class="btn-icon" id="redo-btn" onclick="redo()" title="Rehacer ⌘Y" style="opacity:.3;font-size:14px">↪</button>
     </div>
+    <!-- Persistent topbar elements — never overwritten by nav() -->
+    <span id="patch-global-warn" style="display:none;color:var(--accent);font-size:11px;font-weight:900;cursor:pointer" onclick="document.getElementById('sidebar').classList.add('open')"></span>
+    <span id="sync-badge" style="display:none;font-size:10px;cursor:pointer;padding:2px 7px;border-radius:10px;border:1px solid var(--border2);transition:all .2s" onclick="openSyncModal()">☁</span>
     <div class="tbar-actions" id="tbar-actions">
-      <span id="patch-global-warn" style="display:none;color:var(--accent);font-size:11px;font-weight:900;cursor:pointer" onclick="document.getElementById('sidebar').classList.add('open')"></span>
-      <span id="sync-badge" style="display:none;font-size:10px;cursor:pointer;padding:2px 7px;border-radius:10px;border:1px solid var(--border2);transition:all .2s" onclick="openSyncModal()">☁</span>
       <div class="mode-toggle" title="Cambiar modo de visualización">
         <button class="mode-toggle-btn" id="mode-std-btn" onclick="setMode('simple')">Simple</button>
         <button class="mode-toggle-btn active" id="mode-exp-btn" onclick="setMode('extended')">Extendido</button>
@@ -1847,16 +1848,10 @@ function nav(page,aid){
   const iconBtn=`<button class="btn-icon" onclick="toggleTheme()" id="theme-btn" title="Cambiar tema">${theme==='light'?'☾':'☀'}</button>`;
   const actEl=document.getElementById('tbar-actions');
   const helpBtn=`<button class="btn-icon" onclick="openTour()" title="Ayuda rápida" style="font-size:13px">?</button>`;
-  // Preserve sync badge and patch warn — only update the page-specific buttons
-  const syncWarn=actEl.querySelector('#patch-global-warn')?.outerHTML||'';
-  const syncBadge=actEl.querySelector('#sync-badge')?.outerHTML||`<span id="sync-badge" style="display:none;font-size:10px;cursor:pointer;padding:2px 7px;border-radius:10px;border:1px solid var(--border2);transition:all .2s" onclick="openSyncModal()">☁</span>`;
-  const patchWarn=actEl.querySelector('#patch-global-warn')?.outerHTML||`<span id="patch-global-warn" style="display:none;color:var(--accent);font-size:11px;font-weight:900;cursor:pointer" onclick="document.getElementById('sidebar').classList.add('open')"></span>`;
   if(page==='artist'&&artist){
-    actEl.innerHTML=patchWarn+syncBadge+`<span class="badge badge-red">${artist.canales}ch</span><span class="badge badge-green" id="ta-mic">—</span><span class="badge badge-blue" id="ta-di">—</span>${modeToggle}${helpBtn}${iconBtn}`;
+    actEl.innerHTML=`<span class="badge badge-red">${artist.canales}ch</span><span class="badge badge-green" id="ta-mic">—</span><span class="badge badge-blue" id="ta-di">—</span>${modeToggle}${helpBtn}${iconBtn}`;
     updBadges(artist);
-  }else actEl.innerHTML=patchWarn+syncBadge+modeToggle+helpBtn+iconBtn;
-  // Re-apply sync state to restored badge
-  setTimeout(()=>updateSyncBadge(_syncEnabled?'ok':'off'), 0);
+  }else actEl.innerHTML=modeToggle+helpBtn+iconBtn;
   if(page==='orden'){renderOrden();setTimeout(()=>{applyTimelineView();},50);}
   if(page==='summary')renderSummary();
   if(page==='rchlist')renderRchList();
@@ -5341,6 +5336,9 @@ if(!localStorage.getItem('sm.tour_seen')){
 
 // Back to top button
 window.addEventListener('load',()=>{
+  // Show sync badge immediately
+  updateSyncBadge('off');
+
   // Token gate
   initTokenGate();
 
