@@ -1651,6 +1651,11 @@ function saveS(){
   SM_STORE.setProject(S);
   SM_STORE.setMicros(S.micros);
   markDirty();
+  // Debounced server sync
+  if(_syncEnabled){
+    clearTimeout(window._serverSaveTimer);
+    window._serverSaveTimer=setTimeout(saveProjectToServer, 5000);
+  }
   clearTimeout(_backupTimer);
   _backupTimer=setTimeout(()=>{
     try{
@@ -4407,8 +4412,167 @@ async function checkToken(token){
     const data=await res.json();
     return data;
   }catch(e){
-    // If backend is unreachable, allow access with saved token (offline mode)
     return {ok:true, usuario:'offline', offline:true};
+  }
+}
+
+// ── SUPABASE PROJECT SYNC ─────────────────────────────────────────────
+let _syncEnabled=false;
+let _syncTimer=null;
+let _smIsAdmin=false;
+
+async function sbApiCall(endpoint, method='GET', body=null){
+  const token=getSavedToken();
+  if(!token) return null;
+  try{
+    const opts={method, headers:{'Content-Type':'application/json','x-sm-token':token}};
+    if(body) opts.body=JSON.stringify(body);
+    const res=await fetch(BACKEND_URL+endpoint, opts);
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    return await res.json();
+  }catch(e){
+    console.warn('[SYNC]',endpoint,'error:',e.message);
+    return null;
+  }
+}
+
+async function loadProjectFromServer(){
+  const data=await sbApiCall('/api/project');
+  if(!data?.ok||!data.project) return false;
+  try{
+    const proj=data.project.data;
+    if(proj&&typeof proj==='object'&&Object.keys(proj).length){
+      S=migrateState(proj);
+      rebuildArtistPages();
+      renderArtistNav();
+      renderConfig();
+      showToast('Proyecto cargado del servidor ☁','success');
+      return true;
+    }
+  }catch(e){ console.warn('[SYNC] load error:',e); }
+  return false;
+}
+
+async function saveProjectToServer(){
+  if(!_syncEnabled) return;
+  const data=await sbApiCall('/api/project/save','POST',{data:S});
+  if(data?.ok) console.log('[SYNC] saved');
+}
+
+function startAutoSync(){
+  _syncEnabled=true;
+  clearInterval(_syncTimer);
+  _syncTimer=setInterval(saveProjectToServer, 30000);
+  console.log('[SYNC] started');
+}
+
+async function acceptInviteCode(code){
+  const data=await sbApiCall('/api/project/invite','POST',{inviteCode:code});
+  if(!data?.ok) return {ok:false, error:data?.error||'Error desconocido'};
+  return {ok:true, project:data.project};
+}
+
+async function createNewProject(name){
+  const data=await sbApiCall('/api/project/create','POST',{name, data:S});
+  if(!data?.ok) return {ok:false, error:data?.error||'Solo admin puede crear proyectos'};
+  return {ok:true, project:data.project, inviteCode:data.inviteCode};
+}
+
+function updateSyncBadge(status){
+  let badge=document.getElementById('sync-badge');
+  if(!badge){
+    badge=document.createElement('span');
+    badge.id='sync-badge';
+    badge.style.cssText='font-size:10px;cursor:pointer;padding:2px 7px;border-radius:10px;border:1px solid var(--border2);transition:all .2s';
+    badge.onclick=()=>openSyncModal();
+    document.getElementById('tbar-actions')?.prepend(badge);
+  }
+  const s={ok:{t:'☁ Sync',c:'var(--green)'},off:{t:'☁ Local',c:'var(--text3)'},err:{t:'☁ Error',c:'var(--accent)'}}[status]||{t:'☁',c:'var(--text3)'};
+  badge.textContent=s.t; badge.style.color=s.c; badge.style.borderColor=s.c;
+}
+
+function openSyncModal(){
+  let modal=document.getElementById('sync-modal');
+  if(!modal){
+    modal=document.createElement('div');
+    modal.id='sync-modal';
+    modal.className='modal-overlay';
+    modal.innerHTML=`<div class="modal-box" style="max-width:420px;width:92%">
+      <div class="modal-title">☁ Sincronización</div>
+      <div id="sync-modal-body" style="padding:4px 0 12px"></div>
+      <div class="modal-actions"><button class="btn btn-sm" onclick="closeModal('sync-modal')">Cerrar</button></div>
+    </div>`;
+    document.body.appendChild(modal);
+  }
+  const body=document.getElementById('sync-modal-body');
+  if(_syncEnabled){
+    body.innerHTML=`
+      <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Proyecto sincronizado automáticamente cada 30 segundos.</p>
+      <button class="btn btn-sm btn-accent" onclick="saveProjectToServer().then(()=>showToast('Guardado ✓','success'));closeModal('sync-modal')" style="width:100%;margin-bottom:8px">☁ Guardar ahora</button>
+      ${_smIsAdmin?`<hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Admin</div>
+      <button class="btn btn-sm" onclick="showCreateProjectUI()" style="width:100%;margin-bottom:6px">✦ Crear nuevo proyecto</button>`:''}
+      <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+      <button class="btn btn-sm" onclick="showJoinProjectUI()" style="width:100%">🔑 Unirse a otro proyecto</button>`;
+  } else {
+    body.innerHTML=`
+      <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Sin proyecto vinculado. Introduce un código de invitación para unirte.</p>
+      ${_smIsAdmin?`<button class="btn btn-sm btn-accent" onclick="showCreateProjectUI()" style="width:100%;margin-bottom:8px">✦ Crear proyecto compartido</button>`:''}
+      <button class="btn btn-sm" onclick="showJoinProjectUI()" style="width:100%">🔑 Código de invitación</button>`;
+  }
+  modal.classList.add('open');
+}
+
+function showJoinProjectUI(){
+  const body=document.getElementById('sync-modal-body');
+  body.innerHTML=`
+    <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Introduce el código de invitación:</p>
+    <input type="text" id="invite-code-input" placeholder="INV-XXXX-XXXX" autocapitalize="characters"
+      style="width:100%;padding:8px 12px;background:var(--inp-bg);border:1px solid var(--border2);border-radius:var(--radius);color:var(--text);font-family:monospace;font-size:14px;letter-spacing:2px;box-sizing:border-box;text-transform:uppercase;margin-bottom:8px"
+      onkeydown="if(event.key==='Enter')doJoinProject()">
+    <button class="btn btn-sm btn-accent" onclick="doJoinProject()" style="width:100%">Unirse</button>`;
+  setTimeout(()=>document.getElementById('invite-code-input')?.focus(),100);
+}
+
+async function doJoinProject(){
+  const code=(document.getElementById('invite-code-input')?.value||'').trim().toUpperCase();
+  if(!code){showToast('Introduce un código','error');return;}
+  const result=await acceptInviteCode(code);
+  if(result.ok){
+    await loadProjectFromServer();
+    startAutoSync(); updateSyncBadge('ok');
+    closeModal('sync-modal');
+    showToast('Unido al proyecto ✓','success');
+  } else {
+    showToast(result.error||'Código no válido','error');
+  }
+}
+
+function showCreateProjectUI(){
+  const body=document.getElementById('sync-modal-body');
+  body.innerHTML=`
+    <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Nombre del festival / proyecto:</p>
+    <input type="text" id="new-project-name" placeholder="Vibramahou León 2026"
+      style="width:100%;padding:8px 12px;background:var(--inp-bg);border:1px solid var(--border2);border-radius:var(--radius);color:var(--text);font-size:13px;box-sizing:border-box;margin-bottom:8px"
+      onkeydown="if(event.key==='Enter')doCreateProject()">
+    <button class="btn btn-sm btn-accent" onclick="doCreateProject()" style="width:100%">Crear y vincular</button>`;
+  setTimeout(()=>document.getElementById('new-project-name')?.focus(),100);
+}
+
+async function doCreateProject(){
+  const name=(document.getElementById('new-project-name')?.value||'').trim();
+  if(!name){showToast('Introduce un nombre','error');return;}
+  const result=await createNewProject(name);
+  if(result.ok){
+    startAutoSync(); updateSyncBadge('ok');
+    const body=document.getElementById('sync-modal-body');
+    body.innerHTML=`
+      <p style="font-size:12px;color:var(--green);margin-bottom:12px">✓ Proyecto creado.</p>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Código de invitación:</p>
+      <div style="background:var(--bg3);border:1px solid var(--accent);border-radius:6px;padding:14px;text-align:center;font-family:monospace;font-size:20px;letter-spacing:4px;color:var(--accent);margin-bottom:8px">${result.inviteCode}</div>
+      <p style="font-size:10px;color:var(--text3)">Comparte este código con los técnicos invitados. Lo introducen en ☁ → Código de invitación.</p>`;
+  } else {
+    showToast(result.error||'Error','error');
   }
 }
 
@@ -4466,12 +4630,20 @@ async function initTokenGate(){
   if(!saved){
     modal.style.display='flex'; return;
   }
-  // Validate saved token silently
   const result=await checkToken(saved);
   if(result.ok){
     modal.style.display='none';
+    _smIsAdmin=result.isAdmin||false;
+    // Try to load project from server
+    updateSyncBadge('off');
+    const loaded=await loadProjectFromServer();
+    if(loaded){
+      startAutoSync();
+      updateSyncBadge('ok');
+    } else {
+      updateSyncBadge('off');
+    }
   } else {
-    // Token revoked — show modal again
     localStorage.removeItem('sm.access_token');
     modal.style.display='flex';
     const errEl=document.getElementById('token-error');
