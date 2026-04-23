@@ -4446,6 +4446,9 @@ async function loadProjectFromServer(){
       rebuildArtistPages();
       renderArtistNav();
       renderConfig();
+      // Always start sync when project is found
+      if(!_syncEnabled) startAutoSync();
+      updateSyncBadge('ok');
       showToast('Proyecto cargado del servidor ☁','success');
       return true;
     }
@@ -4644,15 +4647,8 @@ async function initTokenGate(){
   if(result.ok){
     modal.style.display='none';
     _smIsAdmin=result.isAdmin||false;
-    // Try to load project from server
     updateSyncBadge('off');
-    const loaded=await loadProjectFromServer();
-    if(loaded){
-      startAutoSync();
-      updateSyncBadge('ok');
-    } else {
-      updateSyncBadge('off');
-    }
+    await loadProjectFromServer();
   } else {
     localStorage.removeItem('sm.access_token');
     modal.style.display='flex';
