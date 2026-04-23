@@ -47,7 +47,11 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
 .nav-sub{padding:5px 18px 5px 28px;font-size:10px;color:var(--text3);letter-spacing:.5px;}
 .nav-sub:hover{background:var(--bg3);color:var(--text2);}
 .nav-sub.active{color:var(--accent);background:rgba(233,69,96,0.08);}
+.plan-element:hover .pe-delete{opacity:1!important;}
+.plan-element:hover .pe-opacity-slider{opacity:0.8!important;}
 .plan-canvas-wrap{position:relative;width:100%;background:#1a1e28;border-radius:8px;overflow:hidden;cursor:grab;user-select:none;touch-action:none;}
+@keyframes shake{0%,100%{transform:translateX(0)}15%{transform:translateX(-8px)}30%{transform:translateX(8px)}45%{transform:translateX(-6px)}60%{transform:translateX(6px)}75%{transform:translateX(-3px)}90%{transform:translateX(3px)}}
+.shake{animation:shake .45s ease-in-out;}
 .plan-canvas-wrap.panning{cursor:grabbing;}
 .plan-element{position:absolute;transform:translate(-50%,-50%);cursor:move;z-index:10;touch-action:none;}
 .plan-element .pe-label{font-size:10px;font-weight:700;text-align:center;pointer-events:none;text-shadow:0 1px 3px rgba(0,0,0,.8);white-space:nowrap;}
@@ -394,6 +398,30 @@ body.light .badge-amber{background:rgba(192,120,0,0.1);}
 @media(max-width:400px){
   #topbar h1{display:none;}
   .file-name-bar{max-width:60px;}
+}
+
+/* ── New features mobile fixes ── */
+@media(max-width:700px){
+  /* Token modal — fix for virtual keyboard */
+  #token-modal .modal-box{margin-top:env(safe-area-inset-top,0);max-height:90vh;overflow-y:auto;}
+  #token-input{font-size:16px!important;} /* prevents iOS auto-zoom on focus */
+
+  /* Tour modal */
+  #tour-modal .pdf-modal{max-height:90vh;overflow-y:auto;}
+
+  /* Load Out — bigger touch targets */
+  #loadout-container input[type=number]{width:64px!important;height:36px;font-size:14px!important;}
+
+  /* Stage plan toolbar — wrap and bigger buttons */
+  .plan-toolbar{gap:4px;padding:6px 10px;}
+  .plan-tool-btn{padding:7px 10px;font-size:12px;}
+  #plan-canvas-wrap{height:calc(100vh - 240px)!important;}
+
+  /* Back to top — avoid iOS bottom bar */
+  #back-to-top{bottom:calc(16px + env(safe-area-inset-bottom, 0px));right:16px;}
+
+  /* PDF modal — full width */
+  .pdf-modal{width:98vw!important;max-width:98vw!important;}
 }
 
 /* ── TABLET layout for Orden del día (701px–1100px) ── */
@@ -4099,7 +4127,14 @@ function renderSbList(){
         const slotNum=parseInt(val);
         const maxSlot=(S.sbConfig?.rows||2)*(S.sbConfig?.cols||8);
         if(isNaN(slotNum)||slotNum<1||slotNum>maxSlot)return;
-        slots[slotNum]={instrumento:(ch.instrumento||'').trim(), chNum:ci+1, artistName:a.nombre, entries:[{instrumento:(ch.instrumento||'').trim()||'?', artistName:a.nombre, chNum:ci+1}]};
+        if(!slots[slotNum]) slots[slotNum]={entries:[], chNum:ci+1, instrumento:'', artistName:a.nombre};
+        slots[slotNum].entries.push({instrumento:(ch.instrumento||'').trim()||'?', artistName:a.nombre, chNum:ci+1});
+      });
+      // Flatten: instrumento = first entry
+      Object.values(slots).forEach(s=>{
+        s.instrumento=s.entries[0]?.instrumento||'';
+        s.chNum=s.entries[0]?.chNum||'';
+        s.multi=s.entries.length>1;
       });
       if(!Object.keys(slots).length)return;
       html+=renderSubboxSVG(sb,slots,a.id);
@@ -4233,7 +4268,7 @@ function renderLoadOut(){
   // Count mics
   const micCount={};
   S.artists.forEach(a=>a.channels.forEach(ch=>{
-    if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));micCount[k]=(micCount[k]||0)+1;}
+    if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));if(k&&k!=='XLR')micCount[k]=(micCount[k]||0)+1;}
   }));
 
   // Count DIs
@@ -4249,11 +4284,27 @@ function renderLoadOut(){
     if(ch.pies?.P)piP++;if(ch.pies?.R)piR++;
   }));
 
-  // Subboxes used
-  const sbUsed=new Set();
-  S.artists.forEach(a=>a.channels.forEach(ch=>{
-    if(ch.subboxes)Object.entries(ch.subboxes).forEach(([k,v])=>{if(v&&v.trim())sbUsed.add(k);});
-  }));
+  // Subboxes used — fixed count as 1, variable count once per artist that uses them
+  const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
+  const sbCount={}; // letter -> count
+  S.subboxes.forEach(sb=>{
+    const letter=sb.letter;
+    if(fixedLetters.has(letter)){
+      // Fixed — count 1 if any artist uses it
+      const anyUse=S.artists.some(a=>a.channels.some(ch=>{
+        const v=(ch.subboxes?.[letter]||'').trim();
+        return v&&!isNaN(parseInt(v));
+      }));
+      if(anyUse) sbCount[letter]=1;
+    } else {
+      // Variable — count artists that use it
+      const artistsUsing=S.artists.filter(a=>a.channels.some(ch=>{
+        const v=(ch.subboxes?.[letter]||'').trim();
+        return v&&!isNaN(parseInt(v));
+      })).length;
+      if(artistsUsing>0) sbCount[letter]=artistsUsing;
+    }
+  });
 
   // Build rows
   const rows=[];
@@ -4266,8 +4317,9 @@ function renderLoadOut(){
     .filter(x=>x.n>0).forEach(({l,n})=>{
       const sp=spare(n,0.25);rows.push({cat:"PIE",item:l,need:n,spare:sp,total:n+sp});
     });
-  [...sbUsed].sort().forEach(letter=>{
-    rows.push({cat:"SUBBOX",item:"Subbox "+letter+" (manguera)",need:1,spare:"—",total:1});
+  Object.entries(sbCount).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([letter,n])=>{
+    const label=fixedLetters.has(letter)?`Subbox ${letter} (manguera fija)`:`Subbox ${letter} (manguera)`;
+    rows.push({cat:"SUBBOX",item:label,need:n,spare:"—",total:n});
   });
 
   const catColor={MICRO:"var(--blue,#4fc3f7)",DI:"var(--green,#1de9b6)",PIE:"var(--amber,#f59e0b)",SUBBOX:"var(--accent)"};
@@ -4363,23 +4415,44 @@ async function submitToken(){
   const btn=document.getElementById('token-submit-btn');
   const errEl=document.getElementById('token-error');
   const token=(inp.value||'').trim().toUpperCase();
-  if(!token){errEl.textContent='Introduce un código de acceso';errEl.style.display='block';return;}
+
+  if(!token){
+    errEl.textContent='Introduce un código de acceso';
+    errEl.style.display='block';
+    inp.classList.remove('shake');
+    void inp.offsetWidth; // reflow to restart animation
+    inp.classList.add('shake');
+    inp.style.borderColor='#e94560';
+    inp.focus();
+    return;
+  }
 
   btn.textContent='Verificando...'; btn.disabled=true;
   errEl.style.display='none';
+  inp.style.borderColor='';
 
   const result=await checkToken(token);
   if(result.ok){
     saveToken(token);
     document.getElementById('token-modal').style.display='none';
-    if(result.offline){
-      console.info('[TOKEN] Backend offline — using cached token');
-    } else {
-      console.info('[TOKEN] Access granted for:', result.usuario);
-    }
+    if(result.offline) console.info('[TOKEN] Backend offline — using cached token');
+    else console.info('[TOKEN] Access granted:', result.usuario);
   } else {
-    errEl.textContent=result.error||'Código no válido';
+    // Vivid error feedback
+    errEl.textContent='❌ '+( result.error||'Código no válido');
     errEl.style.display='block';
+    errEl.style.color='#ff2244';
+    errEl.style.fontWeight='700';
+    errEl.style.fontSize='12px';
+    inp.style.borderColor='#ff2244';
+    inp.style.background='rgba(255,34,68,0.08)';
+    inp.classList.remove('shake');
+    void inp.offsetWidth;
+    inp.classList.add('shake');
+    setTimeout(()=>{
+      inp.style.background='';
+      inp.classList.remove('shake');
+    },600);
     btn.textContent='Acceder →'; btn.disabled=false;
     inp.focus(); inp.select();
   }
@@ -4419,9 +4492,9 @@ let _planPan={x:0,y:0,startX:0,startY:0,active:false};
 let _planScale=1;
 
 function getStagePlan(aid){
-  const a=S.artists.find(x=>x.id===aid);
+  const a=S.artists.find(x=>String(x.id)===String(aid));
   if(!a) return null;
-  if(!a.stagePlan) a.stagePlan={pdfFileId:null,pdfUrl:null,elements:[],pan:{x:0,y:0},scale:1};
+  if(!a.stagePlan) a.stagePlan={pdfFileId:null,pdfUrl:null,pdfLocal:null,elements:[],pan:{x:0,y:0},scale:1,pdfPage:1};
   return a.stagePlan;
 }
 
@@ -4444,7 +4517,7 @@ async function renderStagePlan(aid){
             📄 Subir plano
             <input type="file" accept=".pdf,image/*" style="display:none" onchange="uploadStagePlan(${aid},this)">
           </label>
-          ${plan.pdfUrl?`<button class="btn btn-sm" onclick="removeStagePlanPdf(${aid})" title="Quitar plano" style="color:var(--text3)">🗑 Plano</button>`:''}
+          ${(plan.pdfUrl||plan.pdfLocal)?`<button class="btn btn-sm" onclick="removeStagePlanPdf(${aid})" title="Quitar plano" style="color:var(--accent)">🗑 Quitar plano</button>`:''}
           <button class="btn btn-sm" onclick="planZoom(${aid},0.2)">＋</button>
           <button class="btn btn-sm" onclick="planZoom(${aid},-0.2)">－</button>
           <button class="btn btn-sm" onclick="planResetView(${aid})">⌂</button>
@@ -4471,7 +4544,7 @@ async function renderStagePlan(aid){
           ontouchend="planTouchEnd(event,${aid})">
           <div id="plan-canvas-inner" style="position:absolute;transform-origin:0 0;width:100%;height:100%">
             <div id="plan-bg" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
-              ${plan.pdfUrl
+              ${(plan.pdfUrl||plan.pdfLocal)
                 ? `<canvas id="plan-pdf-canvas" style="display:block;box-shadow:0 4px 20px rgba(0,0,0,.5)"></canvas>`
                 : `<div style="color:var(--text3);font-size:13px;text-align:center;padding:60px 40px">
                     <div style="font-size:48px;margin-bottom:16px">🗺</div>
@@ -4490,7 +4563,8 @@ async function renderStagePlan(aid){
 
   applyPlanTransform();
   renderPlanElements(aid);
-  if(plan.pdfUrl) setTimeout(()=>renderPlanPdf(plan.pdfUrl),150);
+  const pdfSrc=plan.pdfUrl||plan.pdfLocal||null;
+  if(pdfSrc) setTimeout(()=>renderPlanPdf(pdfSrc),150);
 }
 
 function setPlanTool(tool,btn){
@@ -4507,11 +4581,21 @@ function applyPlanTransform(){
 function planZoom(aid,delta){
   _planScale=Math.max(0.2,Math.min(5,_planScale+delta));
   applyPlanTransform(); savePlanView(aid);
+  // Re-render PDF at new zoom for crisp quality
+  const plan=getStagePlan(aid);
+  const src=plan?.pdfUrl||plan?.pdfLocal||null;
+  if(src){
+    clearTimeout(window._planZoomTimer);
+    window._planZoomTimer=setTimeout(()=>renderPlanPdf(src,plan.pdfPage||1),250);
+  }
 }
 
 function planResetView(aid){
   _planPan={x:0,y:0,active:false,startX:0,startY:0};
   _planScale=1; applyPlanTransform(); savePlanView(aid);
+  const plan=getStagePlan(aid);
+  const src=plan?.pdfUrl||plan?.pdfLocal||null;
+  if(src) renderPlanPdf(src,plan.pdfPage||1);
 }
 
 function savePlanView(aid){
@@ -4520,22 +4604,20 @@ function savePlanView(aid){
 }
 
 function planMouseDown(e,aid){
-  const isCanvas=e.target.id==='plan-canvas-wrap'||e.target.id==='plan-canvas-inner'||e.target.id==='plan-bg'||e.target.id==='plan-elements'||e.target.tagName==='CANVAS';
-  if(isCanvas){
-    if(_planTool==='select'){
-      _planPan.active=true;_planPan.startX=e.clientX-_planPan.x;_planPan.startY=e.clientY-_planPan.y;
-      document.getElementById('plan-canvas-wrap')?.classList.add('panning');
-    } else {
-      const wrap=document.getElementById('plan-canvas-wrap');
-      const rect=wrap.getBoundingClientRect();
-      const x=(e.clientX-rect.left-_planPan.x)/_planScale;
-      const y=(e.clientY-rect.top-_planPan.y)/_planScale;
-      placePlanElement(aid,_planTool,x,y);
-    }
-  } else if(e.target.closest('.plan-element')&&_planTool==='select'){
-    const el=e.target.closest('.plan-element');
-    _planDragging={el,id:el.dataset.eid,startX:e.clientX,startY:e.clientY,origX:parseFloat(el.style.left),origY:parseFloat(el.style.top)};
-    e.stopPropagation();
+  if(e.button!==0) return;
+  const isCanvas=e.target.id==='plan-canvas-wrap'||e.target.id==='plan-canvas-inner'||
+    e.target.id==='plan-bg'||e.target.id==='plan-elements'||e.target.tagName==='CANVAS'||
+    (!e.target.closest('.plan-element')&&e.target.closest('#plan-canvas-wrap'));
+  if(!isCanvas) return;
+  if(_planTool==='select'){
+    _planPan.active=true;_planPan.startX=e.clientX-_planPan.x;_planPan.startY=e.clientY-_planPan.y;
+    document.getElementById('plan-canvas-wrap')?.classList.add('panning');
+  } else {
+    const wrap=document.getElementById('plan-canvas-wrap');
+    const rect=wrap.getBoundingClientRect();
+    const x=(e.clientX-rect.left-_planPan.x)/_planScale;
+    const y=(e.clientY-rect.top-_planPan.y)/_planScale;
+    placePlanElement(aid,_planTool,x,y);
   }
 }
 
@@ -4595,36 +4677,123 @@ function planTouchEnd(e,aid){_planPan.active=false;_touch2Start=null;savePlanVie
 
 function placePlanElement(aid,type,x,y){
   const plan=getStagePlan(aid);
+  if(!plan) return;
   let label='',color='#ffffff',icon='';
   if(type.startsWith('sb_')){
     const letter=type.slice(3);
     const sb=S.subboxes.find(s=>s.letter===letter);
-    color=sb?.color||'#888';icon='📦';label='SB '+letter;
+    color=sb?.color||'#888';
+    icon=letter;
+    label='Subbox '+letter;
   } else if(type==='corriente'){
-    color='#ffb347';icon='⚡';label='Corriente';
+    color='#ffffff';icon='⚡';label='Corriente';
   } else if(type==='nota'){
     const txt=prompt('Texto de la nota:','');
     if(!txt) return;
-    color='#4fc3f7';icon='📝';label=txt;
-  }
-  const elem={id:'pe-'+Date.now(),type,x,y,label,color,icon};
+    color='#4fc3f7';icon='';label=txt;
+  } else return;
+  const elem={id:'pe-'+Date.now(),type,x,y,label,color,icon,w:36,h:36,opacity:1};
   plan.elements.push(elem);
   saveS();renderPlanElements(aid);
 }
+
+let _planResizing=null;
 
 function renderPlanElements(aid){
   const plan=getStagePlan(aid);
   const cont=document.getElementById('plan-elements');
   if(!cont||!plan) return;
-  cont.innerHTML=plan.elements.map(el=>`
-    <div class="plan-element" data-eid="${el.id}" style="left:${el.x}px;top:${el.y}px"
-      ondblclick="editPlanElement(event,'${el.id}',${aid})"
-      oncontextmenu="deletePlanElement(event,'${el.id}',${aid})">
-      <div style="width:44px;height:44px;border-radius:50%;background:${el.color};border:2.5px solid white;display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 2px 10px rgba(0,0,0,.6)">
-        ${el.icon}
-      </div>
-      <div class="pe-label" style="color:${el.color};margin-top:3px;font-size:10px;font-weight:700;text-align:center;text-shadow:0 1px 3px rgba(0,0,0,.9);white-space:nowrap">${esc(el.label)}</div>
-    </div>`).join('');
+  cont.innerHTML=plan.elements.map(el=>{
+    const w=el.w||36;
+    const isNota=el.type==='nota';
+    const isSb=el.type?.startsWith('sb_');
+    const isCor=el.type==='corriente';
+    const fontSize=Math.max(10,Math.round(w*0.55));
+
+    const inner = isNota
+      ? `<div style="background:rgba(79,195,247,0.15);border:1.5px solid ${el.color};border-radius:5px;padding:4px 7px;font-size:11px;font-weight:600;color:${el.color};white-space:pre-wrap;word-break:break-word;max-width:160px;min-width:40px;box-shadow:0 2px 6px rgba(0,0,0,.4)">${esc(el.label)}</div>`
+      : isSb
+      ? `<div style="width:${w}px;height:${w}px;border-radius:50%;background:${el.color};display:flex;align-items:center;justify-content:center;font-size:${fontSize}px;font-weight:900;color:white;font-family:monospace;text-shadow:0 1px 2px rgba(0,0,0,.5);box-shadow:0 2px 8px rgba(0,0,0,.5)">${esc(el.icon)}</div>`
+      : `<div style="width:${w}px;height:${w}px;border-radius:50%;background:#222;display:flex;align-items:center;justify-content:center;font-size:${fontSize}px;box-shadow:0 2px 8px rgba(0,0,0,.5)">⚡</div>`;
+
+    return `
+    <div class="plan-element" data-eid="${el.id}"
+      style="left:${el.x}px;top:${el.y}px;position:absolute;cursor:move;user-select:none;opacity:${el.opacity??1}"
+      onmousedown="planElemMouseDown(event,'${el.id}',${aid})">
+      <div onmousedown="event.stopPropagation()" onclick="deletePlanElement(event,'${el.id}',${aid})"
+        style="position:absolute;top:-8px;left:-8px;width:16px;height:16px;border-radius:50%;background:#e94560;color:white;font-size:10px;font-weight:900;display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:20;box-shadow:0 1px 4px rgba(0,0,0,.5);opacity:0;transition:opacity .15s"
+        class="pe-delete">✕</div>
+      <input type="range" min="0.1" max="1" step="0.05" value="${el.opacity??1}"
+        onmousedown="event.stopPropagation()"
+        oninput="setPlanElemOpacity('${el.id}',${aid},this.value)"
+        style="position:absolute;bottom:-18px;left:50%;transform:translateX(-50%);width:${Math.max(w,40)}px;opacity:0;transition:opacity .15s;cursor:pointer;accent-color:${el.color||'#fff'}"
+        class="pe-opacity-slider">
+      ${inner}
+      ${!isNota?`<div onmousedown="planResizeMouseDown(event,'${el.id}',${aid})"
+        style="position:absolute;bottom:0;right:-6px;width:14px;height:14px;cursor:nwse-resize;z-index:15"></div>`:''}
+    </div>`;
+  }).join('');
+}
+
+function setPlanElemOpacity(eid,aid,val){
+  const plan=getStagePlan(aid);
+  const elem=plan?.elements.find(e=>e.id===eid);
+  if(!elem) return;
+  elem.opacity=parseFloat(val);
+  // Update DOM directly without full re-render
+  const el=document.querySelector(`.plan-element[data-eid="${eid}"]`);
+  if(el) el.style.opacity=elem.opacity;
+  // Debounce save
+  clearTimeout(window._opacityTimer);
+  window._opacityTimer=setTimeout(()=>saveS(),400);
+}
+
+function planElemMouseDown(e,eid,aid){
+  if(e.button!==0) return;
+  e.stopPropagation();
+  const el=e.currentTarget;
+  _planDragging={el,id:eid,startX:e.clientX,startY:e.clientY,
+    origX:parseFloat(el.style.left),origY:parseFloat(el.style.top)};
+}
+
+function planResizeMouseDown(e,eid,aid){
+  e.stopPropagation(); e.preventDefault();
+  const el=e.target.closest('.plan-element');
+  const plan=getStagePlan(aid);
+  const elem=plan?.elements.find(x=>x.id===eid);
+  if(!elem) return;
+  _planResizing={el,id:eid,aid,startX:e.clientX,startY:e.clientY,
+    origW:elem.w||60,origH:elem.h||60};
+
+  const onMove=ev=>{
+    if(!_planResizing) return;
+    const dx=(ev.clientX-_planResizing.startX)/_planScale;
+    const nw=Math.max(12,_planResizing.origW+dx);
+    _planResizing.el.style.width=nw+'px';
+    const circle=_planResizing.el.querySelector('div:nth-child(3)');
+    if(circle){
+      circle.style.width=nw+'px';
+      circle.style.height=nw+'px';
+      circle.style.fontSize=Math.max(10,Math.round(nw*0.55))+'px';
+    }
+  };
+  const onUp=()=>{
+    if(_planResizing){
+      const plan2=getStagePlan(_planResizing.aid);
+      const elem2=plan2?.elements.find(x=>x.id===_planResizing.id);
+      if(elem2){
+        const circle=_planResizing.el.querySelector('div:nth-child(3)');
+        const nw=circle?parseFloat(circle.style.width):_planResizing.origW;
+        elem2.w=nw; elem2.h=nw;
+        saveS();
+      }
+      _planResizing=null;
+    }
+    window.removeEventListener('mousemove',onMove);
+    window.removeEventListener('mouseup',onUp);
+  };
+  window.addEventListener('mousemove',onMove);
+  window.addEventListener('mouseup',onUp);
 }
 
 function editPlanElement(e,eid,aid){
@@ -4650,76 +4819,253 @@ function clearAllPlanElements(aid){
   if(plan){plan.elements=[];saveS();renderPlanElements(aid);}
 }
 
-async function renderPlanPdf(url){
+let _planPdfDoc=null; // cached pdf.js document for page navigation
+
+async function renderPlanPdf(src, pageNum=null){
   const canvas=document.getElementById('plan-pdf-canvas');
   if(!canvas) return;
   try{
-    const pdfjsLib=window['pdfjs-dist/build/pdf'];
-    if(!pdfjsLib){ console.warn('pdf.js not available'); return; }
+    const pdfjsLib=window.pdfjsLib||window['pdfjs-dist/build/pdf'];
+    if(!pdfjsLib){ console.error('[PLAN] pdf.js not available on window'); return; }
     pdfjsLib.GlobalWorkerOptions.workerSrc=`https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
 
-    canvas.style.opacity='0.4';
-    const pdf=await pdfjsLib.getDocument({url, withCredentials:false}).promise;
-    const page=await pdf.getPage(1);
+    canvas.style.opacity='0.3';
+
+    // Load doc if not cached or src changed
+    if(!_planPdfDoc || _planPdfDoc._src!==src){
+      let docSource;
+      if(src.startsWith('data:')){
+        const base64=src.split(',')[1];
+        const binary=atob(base64);
+        const bytes=new Uint8Array(binary.length);
+        for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
+        docSource={data:bytes};
+      } else {
+        docSource={url:src, withCredentials:false};
+      }
+      _planPdfDoc=await pdfjsLib.getDocument(docSource).promise;
+      _planPdfDoc._src=src;
+    }
+
+    const totalPages=_planPdfDoc.numPages;
+    const targetPage=pageNum||(_planAid&&getStagePlan(_planAid)?.pdfPage)||1;
+    const safePage=Math.max(1,Math.min(totalPages,targetPage));
+
+    renderPlanPageSelector(totalPages, safePage);
+
+    const page=await _planPdfDoc.getPage(safePage);
     const wrap=document.getElementById('plan-canvas-wrap');
     const maxW=Math.max((wrap?.clientWidth||800)-60, 400);
     const maxH=Math.max((wrap?.clientHeight||600)-60, 300);
     const vp1=page.getViewport({scale:1});
-    const scale=Math.min(maxW/vp1.width, maxH/vp1.height, 3);
-    const vp=page.getViewport({scale});
+
+    // Render at current zoom scale for crisp quality — cap at 4x to avoid OOM
+    const baseScale=Math.min(maxW/vp1.width, maxH/vp1.height);
+    const renderScale=Math.min(baseScale*Math.max(1,_planScale), baseScale*4);
+
+    const vp=page.getViewport({scale:renderScale});
     canvas.width=vp.width;
     canvas.height=vp.height;
+    // Set CSS size to base (zoom is handled by canvas transform)
+    const cssW=vp1.width*baseScale;
+    const cssH=vp1.height*baseScale;
+    canvas.style.width=cssW+'px';
+    canvas.style.height=cssH+'px';
     await page.render({canvasContext:canvas.getContext('2d'), viewport:vp}).promise;
     canvas.style.opacity='1';
+    console.log('[PLAN] PDF rendered OK — page', safePage+'/'+totalPages, vp.width+'×'+vp.height);
   }catch(e){
-    console.warn('Plan PDF render error:', e);
+    console.error('[PLAN] PDF render error:', e);
     canvas.style.opacity='1';
-    // Show error on canvas
     const ctx=canvas.getContext('2d');
-    canvas.width=400; canvas.height=200;
-    ctx.fillStyle='#1a1e28'; ctx.fillRect(0,0,400,200);
-    ctx.fillStyle='#e94560'; ctx.font='14px sans-serif';
-    ctx.fillText('Error cargando plano: '+e.message.slice(0,40), 20, 100);
+    canvas.width=500; canvas.height=100;
+    ctx.fillStyle='#1a1e28'; ctx.fillRect(0,0,500,100);
+    ctx.fillStyle='#e94560'; ctx.font='13px sans-serif';
+    ctx.fillText('Error: '+e.message.slice(0,60), 20, 55);
   }
 }
 
-async function uploadStagePlan(aid,input){
-  const file=input.files[0];
-  if(!file) return;
-  const a=S.artists.find(x=>x.id===aid);
-  if(!a) return;
-  const token=driveGetToken?.();
-  if(!token){alert('Conecta Google Drive primero (Archivo → Abrir desde Drive)');return;}
+function renderPlanPageSelector(total, current){
+  // Remove existing selector
+  document.getElementById('plan-page-selector')?.remove();
+  if(total<=1) return;
 
-  try{
-    const folderId=await driveGetOrCreateFolder();
-    const metadata={name:`plano_${(a.nombre||'artista').replace(/[^a-zA-Z0-9]/g,'_')}_${Date.now()}.pdf`,mimeType:file.type||'application/pdf',parents:[folderId]};
-    const form=new FormData();
-    form.append('metadata',new Blob([JSON.stringify(metadata)],{type:'application/json'}));
-    form.append('file',file);
-    const res=await driveRequest('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',{method:'POST',body:form});
-    const data=await res.json();
-    if(!data.id) throw new Error('Upload failed: '+JSON.stringify(data));
-    // Make publicly readable
-    await driveRequest(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({role:'reader',type:'anyone'})
+  const wrap=document.getElementById('plan-canvas-wrap');
+  if(!wrap) return;
+
+  const sel=document.createElement('div');
+  sel.id='plan-page-selector';
+  sel.style.cssText='position:absolute;bottom:12px;left:50%;transform:translateX(-50%);z-index:20;display:flex;align-items:center;gap:6px;background:rgba(13,15,20,0.85);border:1px solid var(--border2);border-radius:20px;padding:4px 10px;backdrop-filter:blur(4px)';
+  sel.innerHTML=`
+    <button onclick="planGotoPage(${current-1})" style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:16px;padding:0 4px;line-height:1" ${current<=1?'disabled style="opacity:.3"':''}>‹</button>
+    <span style="font-size:11px;color:var(--text2);white-space:nowrap">Página <b style="color:var(--text)">${current}</b> / ${total}</span>
+    <button onclick="planGotoPage(${current+1})" style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:16px;padding:0 4px;line-height:1" ${current>=total?'disabled style="opacity:.3"':''}>›</button>
+    <span style="color:var(--border2);margin:0 2px">|</span>
+    <select onchange="planGotoPage(parseInt(this.value))" style="background:transparent;border:none;color:var(--text2);font-size:11px;cursor:pointer;outline:none">
+      ${Array.from({length:total},(_,i)=>`<option value="${i+1}" ${i+1===current?'selected':''}>Ir a pág. ${i+1}</option>`).join('')}
+    </select>`;
+  wrap.style.position='relative';
+  wrap.appendChild(sel);
+}
+
+function planGotoPage(pageNum){
+  if(!_planAid) return;
+  const plan=getStagePlan(_planAid);
+  if(!plan) return;
+  plan.pdfPage=pageNum;
+  saveS();
+  const src=plan.pdfUrl||plan.pdfLocal||null;
+  if(src) renderPlanPdf(src, pageNum);
+}
+
+async function uploadStagePlan(aid, input){
+  const file=input.files[0];
+  if(!file){ console.log('[PLAN] no file'); return; }
+  const a=S.artists.find(x=>String(x.id)===String(aid));
+  if(!a){ console.error('[PLAN] artist not found:', aid); return; }
+  console.log('[PLAN] file selected:', file.name, file.type, file.size);
+
+  // Images go straight through — no page picker needed
+  if(!file.type.includes('pdf')){
+    const b64=await new Promise((res,rej)=>{
+      const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file);
     });
-    const proxyUrl=`https://stage-master-backend-1.onrender.com/api/proxy-pdf?id=${data.id}`;
+    await doUploadStagePlan(aid,file,b64,1);
+    return;
+  }
+
+  // Read PDF as base64
+  const b64=await new Promise((res,rej)=>{
+    const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file);
+  });
+
+  // Count pages and show picker if >1
+  try{
+    const pdfjsLib=window.pdfjsLib;
+    if(pdfjsLib){
+      pdfjsLib.GlobalWorkerOptions.workerSrc=`https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
+      const base64=b64.split(',')[1];
+      const binary=atob(base64);
+      const bytes=new Uint8Array(binary.length);
+      for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
+      console.log('[PLAN] loading pdf.js doc...');
+      const tmpDoc=await pdfjsLib.getDocument({data:bytes}).promise;
+      const totalPages=tmpDoc.numPages;
+      console.log('[PLAN] total pages:', totalPages);
+      if(totalPages>1){
+        const chosen=await showPagePickerModal(tmpDoc,totalPages,file.name);
+        if(chosen===null) return;
+        await doUploadStagePlan(aid,file,b64,chosen);
+        return;
+      }
+    } else {
+      console.warn('[PLAN] pdf.js not available, loading directly');
+    }
+  }catch(e){ console.warn('[PLAN] page count error:',e.message); }
+
+  await doUploadStagePlan(aid,file,b64,1);
+}
+
+async function showPagePickerModal(pdfDoc,totalPages,fileName){
+  return new Promise(resolve=>{
+    const modal=document.createElement('div');
+    modal.style.cssText='position:fixed;inset:0;z-index:30000;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML=`
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);max-width:520px;width:100%;max-height:88vh;display:flex;flex-direction:column">
+        <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+          <div>
+            <div style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);font-weight:700">Selecciona la página del plano</div>
+            <div style="font-size:10px;color:var(--text3);margin-top:2px">${fileName} · ${totalPages} páginas</div>
+          </div>
+          <button id="ppicker-cancel" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px">✕</button>
+        </div>
+        <div id="ppicker-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px;padding:14px;overflow-y:auto;flex:1">
+          <div style="color:var(--text3);font-size:11px;text-align:center;padding:20px;grid-column:1/-1">Cargando miniaturas...</div>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.querySelector('#ppicker-cancel').onclick=()=>{ modal.remove(); resolve(null); };
+
+    const grid=modal.querySelector('#ppicker-grid');
+    grid.innerHTML='';
+    const limit=Math.min(totalPages,24);
+    for(let p=1;p<=limit;p++){
+      const cell=document.createElement('div');
+      cell.style.cssText='cursor:pointer;border:2px solid var(--border2);border-radius:4px;overflow:hidden;transition:all .15s';
+      cell.onmouseover=()=>{ cell.style.borderColor='var(--accent)'; cell.style.transform='scale(1.03)'; };
+      cell.onmouseout=()=>{ cell.style.borderColor='var(--border2)'; cell.style.transform=''; };
+      const pg=p;
+      cell.onclick=()=>{ modal.remove(); resolve(pg); };
+      const cv=document.createElement('canvas');
+      cv.style.cssText='width:100%;display:block;background:#222';
+      const lbl=document.createElement('div');
+      lbl.style.cssText='font-size:10px;color:var(--text3);text-align:center;padding:3px 0;background:var(--bg3)';
+      lbl.textContent='Pág. '+p;
+      cell.appendChild(cv); cell.appendChild(lbl);
+      grid.appendChild(cell);
+      pdfDoc.getPage(p).then(page=>{
+        const vp=page.getViewport({scale:0.25});
+        cv.width=vp.width; cv.height=vp.height;
+        page.render({canvasContext:cv.getContext('2d'),viewport:vp});
+      });
+    }
+    if(totalPages>limit){
+      const more=document.createElement('div');
+      more.style.cssText='grid-column:1/-1;font-size:10px;color:var(--text3);text-align:center;padding:6px';
+      more.textContent=`Mostrando ${limit} de ${totalPages} páginas`;
+      grid.appendChild(more);
+    }
+  });
+}
+
+async function doUploadStagePlan(aid,file,b64,pageNum){
+  const a=S.artists.find(x=>String(x.id)===String(aid));
+  if(!a){ console.error('[PLAN] doUpload: artist not found:', aid); return; }
+  console.log('[PLAN] doUpload page:', pageNum);
+  const bg=document.getElementById('plan-bg');
+  if(bg) bg.innerHTML=`<div style="color:var(--text3);font-size:13px;text-align:center;padding:40px"><div style="font-size:32px;margin-bottom:8px">⏳</div><div>Cargando...</div></div>`;
+  try{
     const plan=getStagePlan(aid);
-    plan.pdfFileId=data.id;
-    plan.pdfUrl=proxyUrl;
+    const driveConnected=!!(_driveToken&&Date.now()<_driveTokenExp-60000);
+    if(driveConnected){
+      const folderId=await driveGetOrCreateFolder();
+      const metadata={name:`plano_${(a.nombre||'artista').replace(/[^a-zA-Z0-9]/g,'_')}_${Date.now()}.pdf`,mimeType:file.type||'application/pdf',parents:[folderId]};
+      const form=new FormData();
+      form.append('metadata',new Blob([JSON.stringify(metadata)],{type:'application/json'}));
+      form.append('file',file);
+      const res=await driveRequest('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',{method:'POST',body:form});
+      const data=await res.json();
+      if(!data.id) throw new Error('Drive upload failed');
+      await driveRequest(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role:'reader',type:'anyone'})});
+      plan.pdfFileId=data.id;
+      plan.pdfUrl=`https://stage-master-backend-1.onrender.com/api/proxy-pdf?id=${data.id}`;
+      plan.pdfLocal=null;
+    } else {
+      plan.pdfFileId=null; plan.pdfUrl=null; plan.pdfLocal=b64;
+    }
+    plan.pdfPage=pageNum;
+    _planPdfDoc=null;
     saveS();
     await renderStagePlan(aid);
   }catch(e){
-    alert('Error subiendo plano: '+e.message);
+    console.error('[PLAN]',e);
+    alert('Error: '+e.message);
+    await renderStagePlan(aid);
   }
 }
 
 function removeStagePlanPdf(aid){
-  if(!confirm('¿Quitar el plano PDF? Los elementos colocados se mantendrán.')) return;
+  if(!confirm('¿Quitar el plano PDF?\nLos elementos colocados se mantendrán.')) return;
   const plan=getStagePlan(aid);
-  if(plan){plan.pdfFileId=null;plan.pdfUrl=null;saveS();renderStagePlan(aid);}
+  if(plan){
+    plan.pdfFileId=null;
+    plan.pdfUrl=null;
+    plan.pdfLocal=null;
+    plan.pdfPage=1;
+    _planPdfDoc=null;
+    saveS();
+    renderStagePlan(aid);
+  }
 }
 
 // ── TOUR / AYUDA RÁPIDA ───────────────────────────────────────────────
@@ -7118,12 +7464,12 @@ async function runPdfExport(){
       // Build normalized mic count across all channels
       const allMicNorm={};
       S.artists.forEach(a=>a.channels.forEach(ch=>{
-        if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));allMicNorm[k]=(allMicNorm[k]||{});S.artists.forEach((a2,i)=>{
+        if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));if(k==='XLR')return;allMicNorm[k]=(allMicNorm[k]||{});S.artists.forEach((a2,i)=>{
           if(!allMicNorm[k][i]) allMicNorm[k][i]=0;
         });}
       }));
       S.artists.forEach((a,ai)=>a.channels.forEach(ch=>{
-        if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));if(!allMicNorm[k])allMicNorm[k]={};allMicNorm[k][ai]=(allMicNorm[k][ai]||0)+1;}
+        if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));if(k==='XLR')return;if(!allMicNorm[k])allMicNorm[k]={};allMicNorm[k][ai]=(allMicNorm[k][ai]||0)+1;}
       }));
       Object.entries(allMicNorm).sort((a,b)=>{
         const ta=Object.values(a[1]).reduce((s,n)=>s+n,0);
@@ -7240,7 +7586,7 @@ async function runPdfExport(){
         a.channels.forEach(ch=>{
           if(ch.micro){
             const k=normalizeGearName(cleanForPDF(ch.micro));
-            micCount[k]=(micCount[k]||0)+1;
+            if(k&&k!=='XLR') micCount[k]=(micCount[k]||0)+1;
           }
         });
       });
@@ -7265,18 +7611,25 @@ async function runPdfExport(){
         });
       });
 
-      // ── 4. Subboxes used — count unique letters across all artists ──
-      const sbUsed=new Set();
-      S.artists.forEach(a=>{
-        a.channels.forEach(ch=>{
-          if(ch.subboxes) Object.entries(ch.subboxes).forEach(([k,v])=>{ if(v&&v.trim()) sbUsed.add(k); });
-        });
+      // ── 4. Subboxes — fixed count as 1, variable count per artist ──
+      const pdfFixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
+      const pdfSbCount={};
+      S.subboxes.forEach(sb=>{
+        const letter=sb.letter;
+        if(pdfFixedLetters.has(letter)){
+          const anyUse=S.artists.some(a=>a.channels.some(ch=>{
+            const v=(ch.subboxes?.[letter]||'').trim();
+            return v&&!isNaN(parseInt(v));
+          }));
+          if(anyUse) pdfSbCount[letter]=1;
+        } else {
+          const n=S.artists.filter(a=>a.channels.some(ch=>{
+            const v=(ch.subboxes?.[letter]||'').trim();
+            return v&&!isNaN(parseInt(v));
+          })).length;
+          if(n>0) pdfSbCount[letter]=n;
+        }
       });
-      // Also count fixed subboxes from sbConfig
-      if(S.sbConfig?.fixedLines) S.sbConfig.fixedLines.forEach(l=>{ if(l.sbLetter) sbUsed.add(l.sbLetter); });
-
-      // Count mangueras — one per subbox used
-      const mAnguerasNeeded=sbUsed.size;
 
       // ── Build rows ──
       const rows=[];
@@ -7307,11 +7660,10 @@ async function runPdfExport(){
         rows.push(['PIE', label, n, sp, n+sp, '', '']);
       });
 
-      // Subboxes — one row per subbox used, no spare
-      [...sbUsed].sort().forEach(letter=>{
-        const sb=S.subboxes.find(s=>s.letter===letter);
-        const name=sb?`Subbox ${sb.letter} (manguera)`:`Subbox ${letter} (manguera)`;
-        rows.push(['SUBBOX', name, 1, '—', 1, '', '']);
+      // Subboxes — one row per subbox, need = count of artists using it (or 1 if fixed)
+      Object.entries(pdfSbCount).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([letter,n])=>{
+        const label=pdfFixedLetters.has(letter)?`Subbox ${letter} (manguera fija)`:`Subbox ${letter} (manguera)`;
+        rows.push(['SUBBOX', label, n, '—', n, '', '']);
       });
 
       pdf.autoTable({
@@ -9363,7 +9715,8 @@ function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/<
     <div style="margin-bottom:16px">
       <div style="font-size:11px;color:var(--text2);margin-bottom:8px">Introduce tu código de acceso:</div>
       <input type="text" id="token-input" placeholder="SM-XXXX-0000"
-        style="width:100%;padding:10px 14px;background:var(--inp-bg);border:1px solid var(--border2);border-radius:var(--radius);color:var(--text);font-family:var(--font);font-size:14px;letter-spacing:2px;text-transform:uppercase;box-sizing:border-box"
+        inputmode="text" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
+        style="width:100%;padding:10px 14px;background:var(--inp-bg);border:1px solid var(--border2);border-radius:var(--radius);color:var(--text);font-family:var(--font);font-size:16px;letter-spacing:2px;text-transform:uppercase;box-sizing:border-box"
         onkeydown="if(event.key==='Enter')submitToken()">
       <div id="token-error" style="font-size:11px;color:var(--accent);margin-top:6px;display:none"></div>
     </div>
