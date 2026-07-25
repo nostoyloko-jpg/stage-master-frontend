@@ -1219,6 +1219,7 @@ self.addEventListener('fetch',e=>e.respondWith(
 
   <!-- RESUMEN MICROFONÍA -->
   <div class="page" id="page-summary">
+    <div id="summary-tabs" style="display:none;gap:6px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--bg2)"></div>
     <div id="summary-stats" class="summary-grid"></div>
     <div class="card"><div class="card-header"><span class="card-title">Microfonía por artista</span></div><div id="mic-jump-btns" style="display:flex;gap:4px;flex-wrap:wrap;padding:6px 12px 4px;border-bottom:1px solid var(--border)"></div><div id="mic-summary-wrap" style="overflow-x:auto;overflow-y:visible;scroll-behavior:smooth;border-radius:0 0 var(--radius) var(--radius)"><table class="mic-table" id="mic-summary-table"></table></div></div>
     <div class="card"><div class="card-header"><span class="card-title">Pies de micrófono</span></div><div style="overflow-x:auto"><table class="mic-table" id="pies-summary-table"></table></div></div>
@@ -3875,24 +3876,47 @@ function renderOrden(){
 }
 
 // ── SUMMARY ──
+// Global tab state for Resumen microfonía
+let _summaryActiveTab='all';
+
 function renderSummary(){
-  const tC=S.artists.reduce((s,a)=>s+a.canales,0);
-  const tM=S.artists.reduce((s,a)=>s+a.channels.filter(c=>c.micro&&!isLineInput(c.micro)).length,0);
-  const tD=S.artists.reduce((s,a)=>s+a.channels.filter(c=>c.di).length,0);
-  const tP=S.artists.reduce((s,a)=>s+a.channels.reduce((ss,c)=>ss+PIE_DEFS.filter(p=>c.pies?.[p.key]).length,0),0);
-  document.getElementById('summary-stats').innerHTML=[[t('totalCanales'),tC],[t('totalMicros'),tM],[t('totalDIs'),tD],[t('totalPies'),tP],[t('artistas'),S.artists.length]]
+  const tabsEl=document.getElementById('summary-tabs');
+  const days=groupArtistsByDate();
+  const multiDay=days.length>1;
+  let artists=S.artists;
+  if(multiDay){
+    const validTabs=['all',...days.map((_,i)=>'day-'+i)];
+    if(!validTabs.includes(_summaryActiveTab))_summaryActiveTab='all';
+    const tabBtn=(id,label,active)=>`<button onclick="window._summarySetTab('${id}')" style="background:${active?'var(--accent)':'var(--bg3)'};color:${active?'#fff':'var(--text2)'};border:1px solid ${active?'var(--accent)':'var(--border2)'};padding:6px 14px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;letter-spacing:.5px;text-transform:uppercase">${label}</button>`;
+    tabsEl.innerHTML=tabBtn('all','★ Todos',_summaryActiveTab==='all')+days.map((d,i)=>tabBtn('day-'+i,`${d.label} (${d.artists.length})`,_summaryActiveTab==='day-'+i)).join('');
+    tabsEl.style.display='flex';
+    if(_summaryActiveTab!=='all'){
+      const idx=parseInt(_summaryActiveTab.replace('day-',''));
+      artists=days[idx]?.artists||S.artists;
+    }
+  } else {
+    tabsEl.innerHTML='';tabsEl.style.display='none';
+    _summaryActiveTab='all';
+  }
+  window._summarySetTab=function(id){_summaryActiveTab=id;renderSummary();};
+
+  const tC=artists.reduce((s,a)=>s+a.canales,0);
+  const tM=artists.reduce((s,a)=>s+a.channels.filter(c=>c.micro&&!isLineInput(c.micro)).length,0);
+  const tD=artists.reduce((s,a)=>s+a.channels.filter(c=>c.di).length,0);
+  const tP=artists.reduce((s,a)=>s+a.channels.reduce((ss,c)=>ss+PIE_DEFS.filter(p=>c.pies?.[p.key]).length,0),0);
+  document.getElementById('summary-stats').innerHTML=[[t('totalCanales'),tC],[t('totalMicros'),tM],[t('totalDIs'),tD],[t('totalPies'),tP],[t('artistas'),artists.length]]
     .map(([l,v])=>`<div class="stat-card"><div class="stat-label">${l}</div><div class="stat-value">${v}</div></div>`).join('');
-  const aH=S.artists.map((a,i)=>`<th class="mic-art-h" style="min-width:120px;background:${hex2rgba(ARTIST_COLORS[i%ARTIST_COLORS.length],0.3)};color:${ARTIST_COLORS[i%ARTIST_COLORS.length]}">${esc(a.nombre.slice(0,10))}</th>`).join('');
+  const aH=artists.map((a,i)=>`<th class="mic-art-h" style="min-width:120px;background:${hex2rgba(ARTIST_COLORS[i%ARTIST_COLORS.length],0.3)};color:${ARTIST_COLORS[i%ARTIST_COLORS.length]}">${esc(a.nombre.slice(0,10))}</th>`).join('');
   const mR=S.micros.map(mic=>{
     const nm=typeof mic==='string'?mic:mic.nombre;
-    const cc=S.artists.map(a=>a.channels.filter(ch=>ch.micro===nm).length);
+    const cc=artists.map(a=>a.channels.filter(ch=>ch.micro===nm).length);
     const isThisMicLocked=(typeof mic==='object'&&mic.locked)||S.micLocked;
     const mTotal=isThisMicLocked?Math.max(0,...cc):cc.reduce((s,n)=>s+n,0);
     const isLocked=(typeof mic==='object'&&mic.locked)||false;
     const lockMark=isLocked?'<span style="color:var(--amber,#f59e0b);margin-right:4px;font-size:10px">🔒</span>':'';
     return mTotal?`<tr><td class="left">${lockMark}${esc(nm)}</td>${cc.map(n=>`<td class="${n?'':'zero'}">${n||''}</td>`).join('')}<td class="tcol" style="${isLocked?'color:var(--amber,#f59e0b)':''}">${mTotal}</td><td class="left" style="color:var(--text3)">${esc(nm)}</td></tr>`:'';
   }).join('');
-  document.getElementById('mic-summary-table').innerHTML=`<thead><tr><th class="left">${t('micro')}</th>${aH}<th class="tcol">Total</th><th class="left mic-sticky-r" style="color:var(--text3)">${t('micro')}</th></tr></thead><tbody>${mR||`<tr><td colspan="${S.artists.length+3}" class="empty-state">${t('sinDatos')}</td></tr>`}</tbody>`;
+  document.getElementById('mic-summary-table').innerHTML=`<thead><tr><th class="left">${t('micro')}</th>${aH}<th class="tcol">Total</th><th class="left mic-sticky-r" style="color:var(--text3)">${t('micro')}</th></tr></thead><tbody>${mR||`<tr><td colspan="${artists.length+3}" class="empty-state">${t('sinDatos')}</td></tr>`}</tbody>`;
   // Mic summary wrap: ensure natural overflow scroll
   setTimeout(()=>{
     const wrap=document.getElementById('mic-summary-wrap');
@@ -3909,7 +3933,7 @@ function renderSummary(){
   // Jump buttons
   const micJumpEl=document.getElementById('mic-jump-btns');
   if(micJumpEl){
-    micJumpEl.innerHTML=S.artists.map((a,i)=>{
+    micJumpEl.innerHTML=artists.map((a,i)=>{
       const color=ARTIST_COLORS[i%ARTIST_COLORS.length];
       return `<button onclick="scrollMicSummaryTo(${i})" style="padding:2px 8px;border-radius:4px;border:1px solid ${color};background:transparent;color:${color};font-size:9px;font-weight:700;letter-spacing:.5px;cursor:pointer;font-family:var(--font);transition:all .12s;white-space:nowrap" onmouseover="this.style.background='${color}';this.style.color='#fff'" onmouseout="this.style.background='transparent';this.style.color='${color}'">${esc(a.nombre.slice(0,10))}</button>`;
     }).join('');
@@ -3920,7 +3944,7 @@ function renderSummary(){
     if(w) w.style.maxWidth='100%';
   }, 200);
   const pR=PIE_DEFS.map(p=>{
-    const pCounts=S.artists.map(a=>a.channels.filter(ch=>ch.pies?.[p.key]).length);
+    const pCounts=artists.map(a=>a.channels.filter(ch=>ch.pies?.[p.key]).length);
     const pTotal=pCounts.reduce((s,n)=>s+n,0);
     return`<tr><td class="left">${t('pieLbl')} ${t(p.lkey||'pieCorto')}</td>${pCounts.map(n=>`<td class="${n?'':'zero'}">${n||''}</td>`).join('')}<td class="tcol">${pTotal}</td></tr>`;
   }).join('');
@@ -3936,7 +3960,7 @@ function renderSummary(){
     // Fixed lines don't count per artist — they're already accounted for in the fixed section
     const sbR=S.subboxes.filter(sb=>!fixedLetters.has(sb.letter)).map(sb=>{
       // Per artist: 1 if they use this subbox at all, 0 if not
-      const counts=S.artists.map(a=>{
+      const counts=artists.map(a=>{
         const used=a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim());
         return used?1:0;
       });
@@ -3951,17 +3975,17 @@ function renderSummary(){
       const sb=S.subboxes.find(s=>s.letter===ln.sbLetter);
       const dot=sb?`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`:'';
       const qty=ln.quantity||1;
-      const fixedCells=S.artists.map(()=>`<td style="color:var(--text3);font-style:italic;font-size:11px">—</td>`).join('');
+      const fixedCells=artists.map(()=>`<td style="color:var(--text3);font-style:italic;font-size:11px">—</td>`).join('');
       return`<tr style="opacity:.75"><td class="left">${dot}⚓ ${esc(ln.label||'Fijo')} (${ln.sbLetter||'?'}×${qty})</td>${fixedCells}<td class="tcol">${qty}</td></tr>`;
     }).join('');
 
     // Grand total row
     const dynamicTotal=S.subboxes.filter(sb=>!fixedLetters.has(sb.letter)).reduce((s,sb)=>{
-      return s+S.artists.filter(a=>a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim())).length;
+      return s+artists.filter(a=>a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim())).length;
     },0);
     const fixedQtyTotal=(S.sbConfig?.fixedLines||[]).reduce((s,l)=>s+(l.quantity||1),0);
     const grandTotal=dynamicTotal+fixedQtyTotal;
-    const totalRow=`<tr style="font-weight:700;border-top:2px solid var(--border2)"><td class="left" style="color:var(--accent)">TOTAL</td>${S.artists.map(()=>'<td></td>').join('')}<td class="tcol" style="color:var(--accent)">${grandTotal}</td></tr>`;
+    const totalRow=`<tr style="font-weight:700;border-top:2px solid var(--border2)"><td class="left" style="color:var(--accent)">TOTAL</td>${artists.map(()=>'<td></td>').join('')}<td class="tcol" style="color:var(--accent)">${grandTotal}</td></tr>`;
 
     sbEl.innerHTML=`<thead><tr><th class="left">Manguera</th>${aH}<th>Unidades</th></tr></thead><tbody>${fixedRows}${sbR||''}${totalRow}</tbody>`;
   }
