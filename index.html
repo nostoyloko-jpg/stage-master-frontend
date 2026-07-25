@@ -2138,8 +2138,21 @@ function getPatchErrorsForArtist(a){
   return errors;
 }
 
+// Collapsed-day state for sidebar (persisted in localStorage)
+let _navCollapsedDays=(()=>{try{return new Set(JSON.parse(localStorage.getItem('sm.navCollapsedDays')||'[]'));}catch(e){return new Set();}})();
+function _navSaveCollapsed(){try{localStorage.setItem('sm.navCollapsedDays',JSON.stringify([..._navCollapsedDays]));}catch(e){}}
+function toggleNavDay(key){
+  if(_navCollapsedDays.has(key))_navCollapsedDays.delete(key);
+  else _navCollapsedDays.add(key);
+  _navSaveCollapsed();renderArtistNav();
+}
+
 function renderArtistNav(){
-  document.getElementById('artist-nav').innerHTML=S.artists.map(a=>{
+  const nav=document.getElementById('artist-nav');
+  const groups=groupArtistsByDate();
+  const multiDay=groups.length>1;
+
+  function itemHtml(a){
     const errs=getPatchErrorsForArtist(a);
     const warn=errs.length?`<span title="${errs.join('\n')}" style="color:var(--accent);font-size:11px;font-weight:900;margin-left:2px">⚠</span>`:'';
     const hasPlan=!!(a.stagePlan?.pdfFileId||a.stagePlan?.elements?.length);
@@ -2155,7 +2168,24 @@ function renderArtistNav(){
       <span>Plano</span>
       ${hasPlan?`<span style="margin-left:auto;width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block"></span>`:''}
     </div>`;
-  }).join('');
+  }
+
+  if(!multiDay){
+    // Flat list — original behaviour when there's only one day (or none)
+    nav.innerHTML=S.artists.map(itemHtml).join('');
+  } else {
+    nav.innerHTML=groups.map(g=>{
+      const collapsed=_navCollapsedDays.has(g.key);
+      const arrow=collapsed?'▸':'▾';
+      const header=`<div class="nav-day-header" onclick="toggleNavDay('${g.key}')" style="display:flex;align-items:center;gap:6px;padding:6px 10px;margin-top:6px;background:var(--bg3);border-radius:5px;font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--accent);cursor:pointer;user-select:none;border:1px solid var(--border)">
+        <span style="font-size:9px;color:var(--text2)">${arrow}</span>
+        <span style="flex:1">${esc(g.label)}</span>
+        <span style="background:var(--bg2);border-radius:10px;padding:1px 7px;font-size:9px;color:var(--text2)">${g.artists.length}</span>
+      </div>`;
+      const body=collapsed?'':`<div style="padding-left:0">${g.artists.map(itemHtml).join('')}</div>`;
+      return header+body;
+    }).join('');
+  }
 
   // Global warning in topbar
   const totalErrs=S.artists.reduce((n,a)=>n+getPatchErrorsForArtist(a).length,0);
@@ -4307,136 +4337,206 @@ function renderSubboxSVG(sb, slots, ownerArtistId){
 }
 
 // ── LOAD OUT ──────────────────────────────────────────────────────────
+// Compute all counts (mics, DIs, pies, mangueras, cajetines) for a given subset of artists.
+// Returns {micCount, diM, diST, piC, piA, piP, piR, sbCount, cajetinesByLetter}.
+function computeLoadStats(artists){
+  const micCount={};
+  artists.forEach(a=>a.channels.forEach(ch=>{
+    if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));if(k&&k!=='XLR')micCount[k]=(micCount[k]||0)+1;}
+  }));
+  let diM=0,diST=0;
+  artists.forEach(a=>a.channels.forEach(ch=>{
+    if(ch.di==="M")diM++;else if(ch.di==="ST")diST++;
+  }));
+  let piC=0,piA=0,piP=0,piR=0;
+  artists.forEach(a=>a.channels.forEach(ch=>{
+    if(ch.pies?.C)piC++;if(ch.pies?.A)piA++;
+    if(ch.pies?.P)piP++;if(ch.pies?.R)piR++;
+  }));
+  const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
+  const sbCount={},cajetinesByLetter={};
+  S.subboxes.forEach(sb=>{
+    const letter=sb.letter;
+    const usesLetter=a=>a.channels.some(ch=>{const v=(ch.subboxes?.[letter]||'').trim();return v&&!isNaN(parseInt(v));});
+    if(fixedLetters.has(letter)){
+      if(artists.some(usesLetter)){
+        sbCount[letter]=1;
+        const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
+        cajetinesByLetter[letter]=fixedLine?(fixedLine.quantity||1):1;
+      }
+    } else {
+      const artistsUsing=artists.filter(usesLetter);
+      if(artistsUsing.length){
+        sbCount[letter]=artistsUsing.length;
+        cajetinesByLetter[letter]=artistsUsing.reduce((s,a)=>s+Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1)),0);
+      }
+    }
+  });
+  return {micCount,diM,diST,piC,piA,piP,piR,sbCount,cajetinesByLetter,fixedLetters};
+}
+
+// Build the flat rows array from a stats object.
+function buildLoadRows(stats){
+  function spare(n,rate){return Math.max(1,Math.ceil(n*rate));}
+  const rows=[];
+  Object.entries(stats.micCount).sort((a,b)=>b[1]-a[1]).forEach(([mic,n])=>{
+    const sp=spare(n,0.15);rows.push({cat:"MICRO",item:mic,need:n,spare:sp,total:n+sp});
+  });
+  if(stats.diM>0){const sp=spare(stats.diM,0.15);rows.push({cat:"DI",item:"DI Mono",need:stats.diM,spare:sp,total:stats.diM+sp});}
+  if(stats.diST>0){const sp=spare(stats.diST,0.15);rows.push({cat:"DI",item:"DI Stereo",need:stats.diST,spare:sp,total:stats.diST+sp});}
+  [{l:"Pie Corto",n:stats.piC},{l:"Pie Alto",n:stats.piA},{l:"Pie Pinza",n:stats.piP},{l:"Pie Recto",n:stats.piR}]
+    .filter(x=>x.n>0).forEach(({l,n})=>{
+      const sp=spare(n,0.25);rows.push({cat:"PIE",item:l,need:n,spare:sp,total:n+sp});
+    });
+  Object.entries(stats.sbCount).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([letter,n])=>{
+    const label=stats.fixedLetters.has(letter)?`Manguera ${letter} (fija)`:`Manguera ${letter}`;
+    rows.push({cat:"SUBBOX",item:label,need:n,spare:"—",total:n});
+    const cajetines=stats.cajetinesByLetter[letter]||0;
+    if(cajetines>n){
+      rows.push({cat:"SUBBOX",item:`↳ Cajetines — Manguera ${letter} ×${cajetines}`,need:cajetines,spare:"—",total:cajetines});
+    }
+  });
+  return rows;
+}
+
+// Group artists by their date; artists with no date land in a "Sin fecha" bucket.
+function groupArtistsByDate(){
+  const map={}; // dateKey -> [artists]
+  S.artists.forEach(a=>{
+    const k=(a.fecha||'').trim()||'__nodate__';
+    if(!map[k])map[k]=[];
+    map[k].push(a);
+  });
+  // sort keys chronologically, no-date at the end
+  const keys=Object.keys(map).sort((a,b)=>{
+    if(a==='__nodate__')return 1;if(b==='__nodate__')return -1;
+    return a.localeCompare(b);
+  });
+  return keys.map(k=>({key:k,label:k==='__nodate__'?'Sin fecha':fmtDate(k),artists:map[k]}));
+}
+
+// Global tab state for Load Out (persists across re-renders, resets on nav).
+let _loActiveTab='total';
+
 function renderLoadOut(){
   const cont=document.getElementById('loadout-container');
   if(!cont)return;
   if(!S.artists.length){cont.innerHTML=`<div class="empty-state">Sin artistas</div>`;return;}
-
-  function spare(n,rate){return Math.max(1,Math.ceil(n*rate));}
 
   // Load saved checkbox state
   let loState={};
   try{const saved=localStorage.getItem('sm.loadout');if(saved)loState=JSON.parse(saved);}catch(e){}
   function saveLoState(){try{localStorage.setItem('sm.loadout',JSON.stringify(loState));}catch(e){}}
 
-  // Count mics
-  const micCount={};
-  S.artists.forEach(a=>a.channels.forEach(ch=>{
-    if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));if(k&&k!=='XLR')micCount[k]=(micCount[k]||0)+1;}
-  }));
+  // Group by day
+  const days=groupArtistsByDate();
+  const multiDay=days.length>1;
 
-  // Count DIs
-  let diM=0,diST=0;
-  S.artists.forEach(a=>a.channels.forEach(ch=>{
-    if(ch.di==="M")diM++;else if(ch.di==="ST")diST++;
-  }));
+  // Per-day stats and rows
+  const perDay=days.map(d=>({...d,stats:computeLoadStats(d.artists),rows:buildLoadRows(computeLoadStats(d.artists))}));
 
-  // Count pies
-  let piC=0,piA=0,piP=0,piR=0;
-  S.artists.forEach(a=>a.channels.forEach(ch=>{
-    if(ch.pies?.C)piC++;if(ch.pies?.A)piA++;
-    if(ch.pies?.P)piP++;if(ch.pies?.R)piR++;
-  }));
-
-  // Mangueras used — fixed count as 1, variable count once per artist that uses them
-  const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
-  const sbCount={}; // letter -> count
-  S.subboxes.forEach(sb=>{
-    const letter=sb.letter;
-    if(fixedLetters.has(letter)){
-      // Fixed — count 1 if any artist uses it
-      const anyUse=S.artists.some(a=>a.channels.some(ch=>{
-        const v=(ch.subboxes?.[letter]||'').trim();
-        return v&&!isNaN(parseInt(v));
-      }));
-      if(anyUse) sbCount[letter]=1;
-    } else {
-      // Variable — count artists that use it
-      const artistsUsing=S.artists.filter(a=>a.channels.some(ch=>{
-        const v=(ch.subboxes?.[letter]||'').trim();
-        return v&&!isNaN(parseInt(v));
-      })).length;
-      if(artistsUsing>0) sbCount[letter]=artistsUsing;
-    }
-  });
-
-  // Build rows
-  const rows=[];
-  Object.entries(micCount).sort((a,b)=>b[1]-a[1]).forEach(([mic,n])=>{
-    const sp=spare(n,0.15);rows.push({cat:"MICRO",item:mic,need:n,spare:sp,total:n+sp});
-  });
-  if(diM>0){const sp=spare(diM,0.15);rows.push({cat:"DI",item:"DI Mono",need:diM,spare:sp,total:diM+sp});}
-  if(diST>0){const sp=spare(diST,0.15);rows.push({cat:"DI",item:"DI Stereo",need:diST,spare:sp,total:diST+sp});}
-  [{l:"Pie Corto",n:piC},{l:"Pie Alto",n:piA},{l:"Pie Pinza",n:piP},{l:"Pie Recto",n:piR}]
-    .filter(x=>x.n>0).forEach(({l,n})=>{
-      const sp=spare(n,0.25);rows.push({cat:"PIE",item:l,need:n,spare:sp,total:n+sp});
+  // Compute "Total (máximo)" — for each element across all rows in all days, take the max
+  // Key by "cat|item" so the same element (e.g. "MICRO|SM58") from different days is merged with MAX.
+  const maxMap={}; // key -> row (with max need/spare/total)
+  perDay.forEach(d=>{
+    d.rows.forEach(r=>{
+      const key=r.cat+'|'+r.item;
+      const cur=maxMap[key];
+      if(!cur||r.total>cur.total){
+        maxMap[key]={...r};
+      }
     });
-  Object.entries(sbCount).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([letter,n])=>{
-    const label=fixedLetters.has(letter)?`Manguera ${letter} (fija)`:`Manguera ${letter}`;
-    rows.push({cat:"SUBBOX",item:label,need:n,spare:"—",total:n});
-    // Cajetines — physical breakout boxes this manguera is split across on stage.
-    // Cada artista decide cuántos cajetines necesita para su propia manguera; se suman los distintos.
-    // Solo se muestra cuando el total pedido supera el nº de mangueras (n) — si no, es 1 cajetín por artista (por defecto).
-    const cajetines=getCajetinesTotal(letter);
-    if(cajetines>n){
-      rows.push({cat:"SUBBOX",item:`↳ Cajetines — Manguera ${letter} ×${cajetines}`,need:cajetines,spare:"—",total:cajetines});
-    }
   });
+  const totalRows=Object.values(maxMap).sort((a,b)=>{
+    const catOrder={MICRO:0,DI:1,PIE:2,SUBBOX:3};
+    if(catOrder[a.cat]!==catOrder[b.cat])return catOrder[a.cat]-catOrder[b.cat];
+    if(a.cat==='MICRO')return b.total-a.total;
+    return a.item.localeCompare(b.item);
+  });
+
+  // Tab bar (only if multi-day)
+  if(!multiDay) _loActiveTab='total';
+  const validTabs=['total',...perDay.map((_,i)=>'day-'+i)];
+  if(!validTabs.includes(_loActiveTab))_loActiveTab='total';
 
   const catColor={MICRO:"var(--blue,#4fc3f7)",DI:"var(--green,#1de9b6)",PIE:"var(--amber,#f59e0b)",SUBBOX:"var(--accent)"};
   const catBg={MICRO:"rgba(79,195,247,0.08)",DI:"rgba(29,233,182,0.08)",PIE:"rgba(245,158,11,0.08)",SUBBOX:"rgba(233,69,96,0.08)"};
 
-  let html=`<table class="lineup-table" style="width:100%;min-width:560px">
-    <thead><tr>
-      <th style="width:70px">Categoria</th>
-      <th>Elemento</th>
-      <th style="width:50px;text-align:center">Need</th>
-      <th style="width:50px;text-align:center;color:var(--accent)">Spare</th>
-      <th style="width:50px;text-align:center;font-weight:800">Total</th>
-      <th style="width:80px;text-align:center">Load In</th>
-      <th style="width:80px;text-align:center">Load Out</th>
-    </tr></thead><tbody>`;
+  function tableFor(rows,isTotalTab){
+    let html=`<table class="lineup-table" style="width:100%;min-width:560px">
+      <thead><tr>
+        <th style="width:70px">Categoria</th>
+        <th>Elemento</th>
+        <th style="width:50px;text-align:center">Need</th>
+        <th style="width:50px;text-align:center;color:var(--accent)">Spare</th>
+        <th style="width:50px;text-align:center;font-weight:800">Total</th>
+        ${isTotalTab?`<th style="width:80px;text-align:center">Load In</th><th style="width:80px;text-align:center">Load Out</th>`:''}
+      </tr></thead><tbody>`;
+    rows.forEach(r=>{
+      const key=r.cat+"_"+r.item.replace(/[^a-zA-Z0-9]/g,"_");
+      const inVal=loState[key+"_in"]||'';
+      const outVal=loState[key+"_out"]||'';
+      const inNum=parseInt(inVal)||0;
+      const outNum=parseInt(outVal)||0;
+      const mismatch=isTotalTab&&inNum>0&&outNum>0&&outNum<inNum;
+      const lost=mismatch?inNum-outNum:0;
+      const rowBg=mismatch?"background:rgba(233,69,96,0.18);outline:2px solid var(--accent);outline-offset:-2px":`background:${catBg[r.cat]||''}`;
+      const warn=mismatch?`<span style="color:var(--accent);font-weight:900;margin-left:6px" title="Faltan ${lost} unidades">&#9888; -${lost}</span>`:'';
+      const inpStyle="width:54px;text-align:center;font-size:12px;font-weight:600;background:var(--inp-bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);padding:3px 4px;font-family:var(--font)";
+      html+=`<tr style="${rowBg}">
+        <td style="font-size:9px;letter-spacing:1px;font-weight:700;color:${catColor[r.cat]||"var(--text3)"}">${r.cat}</td>
+        <td style="font-weight:500">${esc(r.item)}${warn}</td>
+        <td style="text-align:center;color:var(--text2)">${r.need}</td>
+        <td style="text-align:center;color:var(--accent);font-weight:700">${r.spare}</td>
+        <td style="text-align:center;font-weight:800;font-size:13px">${r.total}</td>
+        ${isTotalTab?`
+        <td style="text-align:center"><input type="number" min="0" value="${esc(inVal)}" placeholder="—"
+          style="${inpStyle};border-color:${inVal?'var(--green,#1de9b6)':'var(--border2)'}"
+          oninput="window._updLo('${key}','in',this.value)"></td>
+        <td style="text-align:center"><input type="number" min="0" value="${esc(outVal)}" placeholder="—"
+          style="${inpStyle};border-color:${outVal?(mismatch?'var(--accent)':'var(--green,#1de9b6)'):'var(--border2)'}"
+          oninput="window._updLo('${key}','out',this.value)"></td>`:''}
+      </tr>`;
+    });
+    if(!rows.length)html+=`<tr><td colspan="${isTotalTab?7:5}" style="text-align:center;padding:24px;color:var(--text3);font-style:italic">Sin material asignado</td></tr>`;
+    html+='</tbody></table>';
+    return html;
+  }
 
-  rows.forEach((r)=>{
-    const key=r.cat+"_"+r.item.replace(/[^a-zA-Z0-9]/g,"_");
-    const inVal=loState[key+"_in"]||'';
-    const outVal=loState[key+"_out"]||'';
-    const inNum=parseInt(inVal)||0;
-    const outNum=parseInt(outVal)||0;
-    // Mismatch: load out recorded but less than load in
-    const mismatch=inNum>0&&outNum>0&&outNum<inNum;
-    const lost=mismatch?inNum-outNum:0;
-    const rowBg=mismatch?"background:rgba(233,69,96,0.18);outline:2px solid var(--accent);outline-offset:-2px":`background:${catBg[r.cat]||''}`;
-    const warn=mismatch?`<span style="color:var(--accent);font-weight:900;margin-left:6px" title="Faltan ${lost} unidades">&#9888; -${lost}</span>`:'';
-    const inpStyle="width:54px;text-align:center;font-size:12px;font-weight:600;background:var(--inp-bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);padding:3px 4px;font-family:var(--font)";
-    html+=`<tr style="${rowBg}">
-      <td style="font-size:9px;letter-spacing:1px;font-weight:700;color:${catColor[r.cat]||"var(--text3)"}">${r.cat}</td>
-      <td style="font-weight:500">${esc(r.item)}${warn}</td>
-      <td style="text-align:center;color:var(--text2)">${r.need}</td>
-      <td style="text-align:center;color:var(--accent);font-weight:700">${r.spare}</td>
-      <td style="text-align:center;font-weight:800;font-size:13px">${r.total}</td>
-      <td style="text-align:center"><input type="number" min="0" value="${esc(inVal)}" placeholder="—"
-        style="${inpStyle};border-color:${inVal?'var(--green,#1de9b6)':'var(--border2)'}"
-        oninput="window._updLo('${key}','in',this.value)"></td>
-      <td style="text-align:center"><input type="number" min="0" value="${esc(outVal)}" placeholder="—"
-        style="${inpStyle};border-color:${outVal?(mismatch?'var(--accent)':'var(--green,#1de9b6)'):'var(--border2)'}"
-        oninput="window._updLo('${key}','out',this.value)"></td>
-    </tr>`;
-  });
+  let html='';
+  if(multiDay){
+    const tabBtn=(id,label,active)=>`<button class="lo-tab-btn ${active?'active':''}" onclick="window._loSetTab('${id}')" style="background:${active?'var(--accent)':'var(--bg3)'};color:${active?'#fff':'var(--text2)'};border:1px solid ${active?'var(--accent)':'var(--border2)'};padding:6px 14px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;letter-spacing:.5px;text-transform:uppercase">${label}</button>`;
+    html+=`<div style="display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--bg2)">
+      ${tabBtn('total','★ Total (máximo)',_loActiveTab==='total')}
+      ${perDay.map((d,i)=>tabBtn('day-'+i,`${d.label} (${d.artists.length})`,_loActiveTab==='day-'+i)).join('')}
+    </div>`;
+  }
 
-  html+=`</tbody></table>
-  <div style="display:flex;align-items:center;gap:12px;font-size:10px;color:var(--text3);padding:10px 16px;border-top:1px solid var(--border)">
-    <span>Spare micros/DI = max(1,N×15%) · pies = max(1,N×25%)</span>
-    <span style="color:var(--accent)">&#9888; = diferencia entre Load In y Load Out</span>
+  if(_loActiveTab==='total'){
+    html+=tableFor(totalRows,true);
+  } else {
+    const idx=parseInt(_loActiveTab.replace('day-',''));
+    const d=perDay[idx];
+    if(d){
+      html+=`<div style="padding:10px 16px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:11px;color:var(--text2)">
+        <b style="color:var(--accent);font-size:12px">${esc(d.label)}</b> — ${d.artists.length} ${d.artists.length===1?'artista':'artistas'}: ${d.artists.map(a=>esc(a.nombre||'—')).join(', ')}
+      </div>`;
+      html+=tableFor(d.rows,false);
+    }
+  }
+
+  html+=`<div style="display:flex;align-items:center;gap:12px;font-size:10px;color:var(--text3);padding:10px 16px;border-top:1px solid var(--border)">
+    <span>Spare micros/DI = max(1,N×15%) · pies = max(1,N×25%)${multiDay?' · Total = máximo por elemento entre días':''}</span>
+    ${_loActiveTab==='total'?`<span style="color:var(--accent)">&#9888; = diferencia entre Load In y Load Out</span>`:''}
     <button class="btn btn-sm" onclick="window._clearLo()" style="margin-left:auto;font-size:10px">Limpiar</button>
   </div>`;
 
   cont.innerHTML=html;
 
+  window._loSetTab=function(id){_loActiveTab=id;renderLoadOut();};
   window._updLo=function(key,type,val){
     loState[key+"_"+type]=val;
     saveLoState();
-    // Debounce re-render to avoid flickering while typing
     clearTimeout(window._loTimer);
     window._loTimer=setTimeout(()=>renderLoadOut(),400);
   };
