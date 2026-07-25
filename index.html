@@ -768,7 +768,7 @@ self.addEventListener('fetch',e=>e.respondWith(
     <div class="nav-item"        onclick="nav('orden')"   id="nav-orden"><span class="dot"></span>Orden del día</div>
     <div class="nav-item"        onclick="nav('summary')" id="nav-summary"><span class="dot"></span>Resumen microfonía</div>
     <div class="nav-item"        onclick="nav('rchlist')" id="nav-rchlist"><span class="dot"></span>Resumen CH List</div>
-    <div class="nav-item"        onclick="nav('sblist')"  id="nav-sblist"><span class="dot"></span>Resumen Mangueras</div>
+    <div class="nav-item"        onclick="nav('sblist')"  id="nav-sblist"><span class="dot"></span>Resumen Cajetines</div>
     <div class="nav-item"        onclick="nav('loadout')" id="nav-loadout"><span class="dot"></span>Load Out</div>
   </div>
   <div class="nav-section nav-artist-list">
@@ -1237,7 +1237,8 @@ self.addEventListener('fetch',e=>e.respondWith(
   <!-- RESUMEN SUBBOX -->
   <div class="page" id="page-sblist">
     <div class="card">
-      <div class="card-header"><span class="card-title">Resumen Mangueras — todos los artistas</span></div>
+      <div class="card-header"><span class="card-title">Resumen Cajetines — todos los artistas</span></div>
+      <div id="sblist-tabs" style="display:none;gap:6px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--bg2)"></div>
       <div id="sblist-container"></div>
     </div>
   </div>
@@ -1455,7 +1456,7 @@ const LANGS={
   es:{
     // Nav
     config:'Configuración',orden:'Orden del día',summary:'Resumen microfonía',
-    rchlist:'Resumen CH List',sblist:'Resumen Mangueras',
+    rchlist:'Resumen CH List',sblist:'Resumen Cajetines',
     // File menu
     archivo:'Archivo',
     nuevo:'Nuevo CH List',abrir:'Abrir...',guardar:'Guardar',guardarComo:'Guardar como...',
@@ -1495,7 +1496,7 @@ const LANGS={
     sinDatos:'Sin datos',sinArtistas:'Sin artistas configurados',
     // Resumen CH list
     resumenCHList:'Resumen CH List — todos los artistas',
-    resumenSubbox:'Resumen Mangueras — todos los artistas',
+    resumenSubbox:'Resumen Cajetines — todos los artistas',
     notasLabel:'Notas',notasPh:'Notas para este artista...',
     // PDF modal
     exportarPDF:'Exportar PDF',
@@ -1541,7 +1542,7 @@ const LANGS={
   },
   en:{
     config:'Settings',orden:'Schedule',summary:'Mic Summary',
-    rchlist:'CH List Summary',sblist:'Manguera Summary',
+    rchlist:'CH List Summary',sblist:'Subbox Summary',
     archivo:'File',
     nuevo:'New CH List',abrir:'Open...',guardar:'Save',guardarComo:'Save as...',
     exportPdf:'⬇ Export PDF',
@@ -1574,7 +1575,7 @@ const LANGS={
     subboxUsados:'Mangueras used',
     sinDatos:'No data',sinArtistas:'No artists configured',
     resumenCHList:'CH List Summary — all artists',
-    resumenSubbox:'Manguera Summary — all artists',
+    resumenSubbox:'Subbox Summary — all artists',
     notasLabel:'Notes',notasPh:'Notes for this artist...',
     exportarPDF:'Export PDF',
     seleccionaApartados:'Select which sections to include in the PDF:',
@@ -4346,13 +4347,44 @@ function renderRchListBody(artists){
   return notesRow+`<div class="rchlist-wrap"><table class="rchlist-table"><thead>${h}</thead><tbody>${body}</tbody></table></div>`;
 }
 
+// Global tab state for Resumen Cajetines
+let _sblistActiveTab='all';
+
 function renderSbList(){
-  if(!S.artists.length){document.getElementById('sblist-container').innerHTML=`<div class="empty-state">${t('sinArtistas')}</div>`;return;}
+  const cont=document.getElementById('sblist-container');
+  const tabsEl=document.getElementById('sblist-tabs');
+  if(!cont)return;
+  if(!S.artists.length){cont.innerHTML=`<div class="empty-state">${t('sinArtistas')}</div>`;if(tabsEl){tabsEl.innerHTML='';tabsEl.style.display='none';}return;}
+
+  const days=groupArtistsByDate();
+  const multiDay=days.length>1;
+  let artists=S.artists;
+
+  if(multiDay && tabsEl){
+    const validTabs=['all',...days.map((_,i)=>'day-'+i)];
+    if(!validTabs.includes(_sblistActiveTab))_sblistActiveTab='all';
+    const tabBtn=(id,label,active)=>`<button onclick="window._sblistSetTab('${id}')" style="background:${active?'var(--accent)':'var(--bg3)'};color:${active?'#fff':'var(--text2)'};border:1px solid ${active?'var(--accent)':'var(--border2)'};padding:6px 14px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;letter-spacing:.5px;text-transform:uppercase">${label}</button>`;
+    tabsEl.innerHTML=tabBtn('all','★ Todos',_sblistActiveTab==='all')+days.map((d,i)=>tabBtn('day-'+i,`${d.label} (${d.artists.length})`,_sblistActiveTab==='day-'+i)).join('');
+    tabsEl.style.display='flex';
+    if(_sblistActiveTab!=='all'){
+      const idx=parseInt(_sblistActiveTab.replace('day-',''));
+      artists=days[idx]?.artists||S.artists;
+    }
+  } else if(tabsEl){
+    tabsEl.innerHTML='';tabsEl.style.display='none';
+    _sblistActiveTab='all';
+  }
+  window._sblistSetTab=function(id){_sblistActiveTab=id;renderSbList();};
+
+  cont.innerHTML=renderSbListBody(artists);
+}
+
+function renderSbListBody(artists){
   const sbs=S.subboxes;
   const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
   let html='';
 
-  // ── FIXED SUBBOXES — rendered once, merged across all artists ────────
+  // ── FIXED SUBBOXES — rendered once, merged across the selected artists ────────
   const fixedSbs=sbs.filter(sb=>fixedLetters.has(sb.letter));
   if(fixedSbs.length){
     html+=`<div style="margin:0 0 28px 0">`;
@@ -4362,9 +4394,9 @@ function renderSbList(){
     </div>`;
     html+=`<div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">`;
     fixedSbs.forEach(sb=>{
-      // Merge slots from ALL artists
+      // Merge slots from ALL artists in this view
       const slots={};
-      S.artists.forEach(a=>{
+      artists.forEach(a=>{
         a.channels.forEach((ch,ci)=>{
           const val=(ch.subboxes?.[sb.letter]||'').trim();
           if(!val)return;
@@ -4384,7 +4416,7 @@ function renderSbList(){
       html+=renderSubboxSVG(sb,slots);
       // Mic lock bar: mics used in this fixed subbox
       const micNamesInSb=new Set();
-      S.artists.forEach(a=>a.channels.forEach(ch=>{if((ch.subboxes?.[sb.letter]||'').trim()&&ch.micro)micNamesInSb.add(ch.micro);}));
+      artists.forEach(a=>a.channels.forEach(ch=>{if((ch.subboxes?.[sb.letter]||'').trim()&&ch.micro)micNamesInSb.add(ch.micro);}));
       if(micNamesInSb.size){
         const micItems=[...micNamesInSb].map(nm=>{
           const micObj=S.micros.find(m=>typeof m==='object'&&m.nombre===nm);
@@ -4402,8 +4434,8 @@ function renderSbList(){
     html+=`<hr style="border:none;border-top:1px solid var(--border);margin:4px 0 24px 0">`;
   }
 
-  // ── VARIABLE SUBBOXES — rendered per artist ───────────────────────
-  S.artists.forEach(a=>{
+  // ── VARIABLE SUBBOXES — rendered per artist (only the selected day's artists) ───────────────────────
+  artists.forEach(a=>{
     const varSbs=sbs.filter(sb=>!fixedLetters.has(sb.letter));
     if(!varSbs.length)return;
 
@@ -4452,11 +4484,11 @@ function renderSbList(){
   // ── IF ALL SUBBOXES ARE FIXED — show per-artist anyway for notes ─
   if(!fixedLetters.size || sbs.every(sb=>fixedLetters.has(sb.letter))){
     // All are fixed — just show notes per artist
-    const hasNotes=S.artists.some(a=>a.notas);
+    const hasNotes=artists.some(a=>a.notas);
     if(hasNotes){
       html+=`<div style="margin-top:8px">`;
       html+=`<div style="font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--text3);margin-bottom:10px">NOTAS POR ARTISTA</div>`;
-      S.artists.forEach(a=>{
+      artists.forEach(a=>{
         html+=`<div style="margin-bottom:10px">`;
         html+=`<div style="font-size:10px;color:var(--accent);font-weight:700;letter-spacing:1px;margin-bottom:4px">${esc(a.nombre)}</div>`;
         html+=`<textarea style="width:100%;max-width:640px;background:var(--inp-bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--font);font-size:11px;padding:5px 8px;resize:vertical;min-height:28px;line-height:1.5;display:block"
@@ -4468,7 +4500,7 @@ function renderSbList(){
     }
   }
 
-  document.getElementById('sblist-container').innerHTML=`<div style="padding:16px">${html||'<div class="empty-state">Sin asignaciones de subbox</div>'}</div>`;
+  return `<div style="padding:16px">${html||'<div class="empty-state">Sin asignaciones de subbox</div>'}</div>`;
 }
 
 function renderSubboxSVG(sb, slots, ownerArtistId){
@@ -5754,7 +5786,7 @@ const TOUR_STEPS = [
     title: '3. Rellena el Channel List',
     body: `<p style="font-size:13px;line-height:1.7;color:var(--text)">Cada artista tiene su tabla de canales. Las columnas de <b>Manguera</b> (A, B, C...) son donde asignas a qué conector físico va cada canal.</p>
     <p style="font-size:12px;color:var(--text2);margin-top:8px">⚠️ <b>Patch físicamente imposible:</b> Si escribes un número de conector que no existe en la caja, o asignas el mismo conector a dos canales, la celda se pondrá en rojo y el artista mostrará un <span style="color:var(--accent);font-weight:900">⚠</span> en el menú lateral.</p>
-    <p style="font-size:12px;color:var(--text2);margin-top:6px">Puedes asignar conectores pinchando directamente en el <b>Resumen Mangueras</b> — es más visual y evita errores.</p>`
+    <p style="font-size:12px;color:var(--text2);margin-top:6px">Puedes asignar conectores pinchando directamente en el <b>Resumen Cajetines</b> — es más visual y evita errores.</p>`
   },
   {
     title: '4. Exportar PDF',
@@ -7072,7 +7104,7 @@ function applyLang(){
     if(txt==='Microfonía por artista'||txt==='Mics by artist')el.textContent=t('micxArtista');
     if(txt==='Pies de micrófono'||txt==='Mic stands')el.textContent=t('piesMic');
     if(txt==='Mangueras utilizadas'||txt==='Mangueras used')el.textContent=t('subboxUsados');
-    if(txt==='Resumen Mangueras — todos los artistas'||txt==='Mangueras Summary — all artists')el.textContent=t('resumenSubbox');
+    if(txt==='Resumen Cajetines — todos los artistas'||txt==='Resumen Mangueras — todos los artistas'||txt==='Subbox Summary — all artists'||txt==='Mangueras Summary — all artists')el.textContent=t('resumenSubbox');
     if(txt==='Resumen CH List — todos los artistas'||txt==='CH List Summary — all artists')el.textContent=t('resumenCHList');
   });
 
@@ -7908,7 +7940,7 @@ function getPdfSections(){
     {id:'summary',  label:'Resumen microfonía',   sub:'Totales y desglose',      pageId:'page-summary', checked:true},
     {id:'loadout',  label:'Load Out',             sub:'Material + spares',       pageId:'',             checked:true},
     {id:'rchlist',  label:'Resumen CH List',      sub:'Todos los artistas',      pageId:'page-rchlist', checked:true},
-    {id:'sblist',   label:'Resumen Mangueras',       sub:'Diagrama visual',         pageId:'page-sblist',  checked:true},
+    {id:'sblist',   label:'Resumen Cajetines',       sub:'Diagrama visual',         pageId:'page-sblist',  checked:true},
   ];
   // Add one entry per artist CH list
   S.artists.forEach(a=>{
