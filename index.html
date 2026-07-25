@@ -1745,10 +1745,12 @@ function migrateA(a){
     if(ch.phantom===undefined)ch.phantom=false;
     ch.phantom=!!ch.phantom;
     if(ch.diLink===undefined)ch.diLink='';
+    if(ch.premontado===undefined)ch.premontado=false;
+    ch.premontado=!!ch.premontado;
   });
   return a;
 }
-function emptyChannel(){return{subboxes:{},instrumento:'',canalStage:'',micro:'',di:'',phantom:false,diLink:'',pies:{C:false,A:false,P:false,R:false},obs:''}}
+function emptyChannel(){return{subboxes:{},instrumento:'',canalStage:'',micro:'',di:'',phantom:false,diLink:'',pies:{C:false,A:false,P:false,R:false},obs:'',premontado:false}}
 
 // ── Cajetines por manguera — configurado por artista (cada artista decide cuántos cajetines
 // necesita para su propia manguera, según su disposición de escenario) ──
@@ -2232,13 +2234,25 @@ function buildArtistPage(a){
   const pieGroupTh=`<th colspan="${PIE_DEFS.length}" class="th-grp-pie pie-col" style="background:rgba(255,179,71,0.08)">PIE</th>`;
   const pieSubThs=PIE_DEFS.map(p=>`<th class="th-grp-pie pie-col" style="width:24px;background:rgba(255,179,71,0.06)" title="${p.label}">${p.key}</th>`).join('');
 
-  // Pre-scan for diLink pairs to set rowspan
+  // Pre-scan for diLink pairs to set rowspan.
+  // Only a MUTUAL link — row i says "next" AND row i+1 says "prev" — is a well-formed pair.
+  // A one-sided link (only one row set) falls back to normal duplicate rendering below.
   const diLinkNext=new Set(a.channels.map((ch,i)=>ch.diLink==='next'?i:-1).filter(i=>i>=0));
   const diLinkPrev=new Set(a.channels.map((ch,i)=>ch.diLink==='prev'?i:-1).filter(i=>i>=0));
+  const validPairMaster=new Set(); // index of the top row of a valid pair — renders the merged cells (rowspan=2)
+  const validPairFollower=new Set(); // index of the bottom row — its Micro/DI/48V/Pies/Obs cells are covered by the rowspan above
+  a.channels.forEach((ch,i)=>{
+    if(ch.diLink==='next' && a.channels[i+1]?.diLink==='prev'){
+      validPairMaster.add(i);
+      validPairFollower.add(i+1);
+    }
+  });
 
   const rows=a.channels.map((ch,i)=>{
     const isLinkedFromPrev=diLinkPrev.has(i); // this row's micro/DI is merged into prev row
     const isLinkedToNext=diLinkNext.has(i);   // this row spans into next row
+    const isPairMaster=validPairMaster.has(i);
+    const isPairFollower=validPairFollower.has(i);
     const _sbVisual=_sbVisualMode.has(a.id);
     const sbCells=sbs.map((sb,si)=>{
       const val=(ch.subboxes?.[sb.letter]||'').trim();
@@ -2253,7 +2267,6 @@ function buildArtistPage(a){
         return `<td class="sb-td-${si} sb-sub-col" style="background:${hex2rgba(sb.color,0.18)}"><input type="text" class="sb-inp" value="${esc(val)}" placeholder="—" oninput="updCh(${a.id},${i},'sb_${sb.letter}',this.value)" data-row="${i}" data-col="sb${si}" data-aid="${a.id}" data-chidx="${i}" tabindex="0"><span class="print-val">${esc(val)}</span></td>`;
       }
     }).join('');
-    const pieCells=PIE_DEFS.map(p=>`<td class="pie-col" style="width:24px;padding:0 2px"><div class="pie-item"><input type="checkbox" class="pie-cb" ${ch.pies?.[p.key]?'checked':''} title="${p.label}" onchange="updCh(${a.id},${i},'pie_${p.key}',this.checked)"><span class="pie-lbl">${p.key}</span></div><span class="print-val">${ch.pies?.[p.key]?'✓':''}</span></td>`).join('');
     const mOpts='<option value="">—</option>'+S.micros.map(m=>{const nm=typeof m==='string'?m:m.nombre;return`<option value="${esc(nm)}"${ch.micro===nm?' selected':''}>${esc(nm)}</option>`;}).join('');
     // Build simple-mode subbox summary pills
     const sbPills=sbs.map(sb=>{
@@ -2261,18 +2274,23 @@ function buildArtistPage(a){
       if(!val)return'';
       return`<span class="sb-pill" style="background:${hex2rgba(sb.color,0.22)};color:${sb.color}"><span class="sb-pill-letter">${sb.letter}</span>${esc(val)}</span>`;
     }).join('');
-    return`<tr draggable="false">
-      <td class="ch-num" style="cursor:default">${i+1}</td>
-      <td class="sb-summary-col"><div class="sb-pills-wrap">${sbPills}</div></td>
-      ${sbCells}
-      <td class="tleft"><input type="text" class="instr-inp" value="${esc(ch.instrumento||'')}" placeholder="${t('instrumento')}" oninput="updCh(${a.id},${i},'instrumento',this.value)" data-row="${i}" data-col="instr"><span class="print-val">${esc(ch.instrumento||'')}</span></td>
-      <td><input type="text" class="cs-inp" value="${esc(ch.canalStage||'')}" placeholder="—" oninput="updCh(${a.id},${i},'canalStage',this.value)" title="Canal Stage" data-row="${i}" data-col="cs"><span class="print-val">${esc(ch.canalStage||'')}</span></td>
-      <td style="position:relative">
+
+    // ── Merged cells (Micro / DI / 48V / Pies / Obs) — only rendered on the master row
+    // of a valid pair (with rowspan=2), or normally when there's no valid pairing. The
+    // follower row of a valid pair renders NOTHING here — its cells are covered by the
+    // rowspan above. Values stay in sync via updCh's link-mirroring (see updCh).
+    let mergedCellsHtml = '';
+    if(!isPairFollower){
+      const rs = isPairMaster ? ' rowspan="2"' : '';
+      const pieCellsHtml=PIE_DEFS.map(p=>`<td class="pie-col" style="width:24px;padding:0 2px"${rs}><div class="pie-item"><input type="checkbox" class="pie-cb" ${ch.pies?.[p.key]?'checked':''} title="${p.label}" onchange="updCh(${a.id},${i},'pie_${p.key}',this.checked)"><span class="pie-lbl">${p.key}</span></div><span class="print-val">${ch.pies?.[p.key]?'✓':''}</span></td>`).join('');
+      mergedCellsHtml = `
+      <td style="position:relative"${rs}>
         <select class="micro-sel micro-inp" style="${isLinkedFromPrev?'opacity:.5':''}" onchange="updCh(${a.id},${i},'micro',this.value)" data-row="${i}" data-col="micro">${mOpts}</select>
         ${ch.phantom?`<span title="48V phantom" style="position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:50%;background:var(--amber,#f59e0b);opacity:.9;pointer-events:none"></span>`:''}
+        ${isPairMaster?`<div style="font-size:8px;color:var(--blue);margin-top:2px;text-align:center;opacity:.75">↕ par ST (ch${i+1}-${i+2})</div>`:''}
         <span class="print-val">${esc(ch.micro||'')}</span>
       </td>
-      <td class="di-col" style="width:54px;vertical-align:top">
+      <td class="di-col" style="width:54px;vertical-align:top"${rs}>
         <select class="di-sel" style="width:52px;font-size:11px;padding:2px;text-align:center" onchange="updCh(${a.id},${i},'di',this.value);updDiLink(${a.id},${i})">
           <option value="" ${!ch.di?'selected':''}>—</option>
           <option value="M" ${ch.di==='M'?'selected':''}>M</option>
@@ -2286,9 +2304,24 @@ function buildArtistPage(a){
         ${isLinkedFromPrev?'<div style="font-size:9px;color:var(--blue);margin-top:2px;text-align:center">&#8593; ST</div>':''}
         <span class="print-val">${esc(ch.di||'—')}</span>
       </td>
-      <td class="phantom-col" style="width:28px;text-align:center"><input type="checkbox" class="pie-cb phantom-cb" data-aid="${a.id}" data-chidx="${i}" ${ch.phantom?'checked':''} title="48V phantom" onchange="updCh(${a.id},${i},'phantom',this.checked)" style="accent-color:var(--accent)"><span class="print-val">${ch.phantom?'48V':''}</span></td>
-      ${pieCells}
-      <td class="tleft"><textarea class="obs-inp" placeholder="${t('observaciones')}..." oninput="updCh(${a.id},${i},'obs',this.value);autoGrow(this)" data-row="${i}" data-col="obs">${esc(ch.obs||'')}</textarea><span class="print-val">${esc(ch.obs||'')}</span></td>
+      <td class="phantom-col" style="width:28px;text-align:center"${rs}><input type="checkbox" class="pie-cb phantom-cb" data-aid="${a.id}" data-chidx="${i}" ${ch.phantom?'checked':''} title="48V phantom" onchange="updCh(${a.id},${i},'phantom',this.checked)" style="accent-color:var(--accent)"><span class="print-val">${ch.phantom?'48V':''}</span></td>
+      ${pieCellsHtml}
+      <td class="tleft"${rs}><textarea class="obs-inp" placeholder="${t('observaciones')}..." oninput="updCh(${a.id},${i},'obs',this.value);autoGrow(this)" data-row="${i}" data-col="obs">${esc(ch.obs||'')}</textarea><span class="print-val">${esc(ch.obs||'')}</span></td>`;
+    }
+
+    return`<tr draggable="false">
+      <td class="ch-num" style="cursor:default">${i+1}</td>
+      <td class="sb-summary-col"><div class="sb-pills-wrap">${sbPills}</div></td>
+      ${sbCells}
+      <td class="tleft" style="position:relative;${ch.premontado?'background:rgba(29,233,182,0.06)':''}">
+        <input type="text" class="instr-inp" value="${esc(ch.instrumento||'')}" placeholder="${t('instrumento')}" oninput="updCh(${a.id},${i},'instrumento',this.value)" data-row="${i}" data-col="instr" style="${ch.premontado?'padding-right:20px':''}">
+        <button type="button" onclick="updCh(${a.id},${i},'premontado',${!ch.premontado});rebuildArtistPages()" title="${ch.premontado?'Ya montado — no se cuenta en Load Out. Clic para desmarcar':'Marcar como ya montado (ej. ambientes fijos) — no se contará en Load Out'}"
+          style="position:absolute;right:2px;top:50%;transform:translateY(-50%);width:15px;height:15px;border:none;border-radius:3px;cursor:pointer;font-size:9px;line-height:15px;padding:0;background:${ch.premontado?'var(--green,#1de9b6)':'transparent'};color:${ch.premontado?'#04231c':'rgba(255,255,255,.2)'}">📌</button>
+        ${ch.premontado?`<div style="font-size:8px;color:var(--green,#1de9b6);opacity:.85;margin-top:1px">YA MONTADO</div>`:''}
+        <span class="print-val">${esc(ch.instrumento||'')}${ch.premontado?' (ya montado)':''}</span>
+      </td>
+      <td><input type="text" class="cs-inp" value="${esc(ch.canalStage||'')}" placeholder="—" oninput="updCh(${a.id},${i},'canalStage',this.value)" title="Canal Stage" data-row="${i}" data-col="cs"><span class="print-val">${esc(ch.canalStage||'')}</span></td>
+      ${mergedCellsHtml}
     </tr>`;
   }).join('');
 
@@ -2449,6 +2482,15 @@ function validarPatch(aid, idx, sbLetter, valor){
   return null; // OK
 }
 
+// Returns the index of the other channel in a valid mutual stereo-pair link, or null.
+function getDiLinkPartnerIdx(a, idx){
+  const ch=a.channels[idx];
+  if(!ch) return null;
+  if(ch.diLink==='next' && a.channels[idx+1]?.diLink==='prev') return idx+1;
+  if(ch.diLink==='prev' && a.channels[idx-1]?.diLink==='next') return idx-1;
+  return null;
+}
+
 function updCh(aid,idx,field,value){
   const a=S.artists.find(a=>a.id===aid);if(!a||!a.channels[idx])return;
   const ch=a.channels[idx];
@@ -2481,6 +2523,29 @@ function updCh(aid,idx,field,value){
     if(mObj){ch.phantom=mObj.phantom;}
     const row=document.querySelector(`[data-aid="${aid}"][data-chidx="${idx}"].phantom-cb`);
     if(row)row.checked=ch.phantom;
+  }
+  // Mirror merged fields (Micro/DI/48V/Pies/Obs) to the linked stereo-pair partner, if any —
+  // both channels' own data must stay accurate for Load Out/summaries/PDF export, which count
+  // each channel independently and don't know about the visual merge in the CH list.
+  const MIRRORED_FIELDS=['micro','di','phantom','obs'];
+  const isMirroredPie=field.startsWith('pie_');
+  if(MIRRORED_FIELDS.includes(field) || isMirroredPie){
+    const partnerIdx=getDiLinkPartnerIdx(a,idx);
+    if(partnerIdx!=null){
+      const partner=a.channels[partnerIdx];
+      if(partner){
+        if(isMirroredPie){
+          if(!partner.pies)partner.pies={};
+          partner.pies[field.slice(4)]=value;
+        } else {
+          partner[field]=value;
+          if(field==='micro'&&value){
+            const mObj=S.micros.find(m=>m.nombre===value);
+            if(mObj) partner.phantom=mObj.phantom;
+          }
+        }
+      }
+    }
   }
   updBadges(a);updChSum(a);debouncedSave();debouncedSnapshot();
   if(field.startsWith('sb_')) setTimeout(renderArtistNav,0);
@@ -3883,6 +3948,7 @@ let _summaryActiveTab='all';
 function computeSummaryFor(artists){
   const micCounts={};
   artists.forEach(a=>a.channels.forEach(ch=>{
+    if(ch.premontado)return; // ya montado (ej. ambientes fijos) — no se recuenta
     if(ch.micro) micCounts[ch.micro]=(micCounts[ch.micro]||0)+1;
   }));
   const piesCounts={C:0,A:0,P:0,R:0};
@@ -4013,7 +4079,7 @@ function renderSummary(){
   if(titleEl) titleEl.textContent='Cajetines utilizados';
 
   const tC=artists.reduce((s,a)=>s+a.canales,0);
-  const tM=artists.reduce((s,a)=>s+a.channels.filter(c=>c.micro&&!isLineInput(c.micro)).length,0);
+  const tM=artists.reduce((s,a)=>s+a.channels.filter(c=>c.micro&&!isLineInput(c.micro)&&!c.premontado).length,0);
   const tD=artists.reduce((s,a)=>s+a.channels.filter(c=>c.di).length,0);
   const tP=artists.reduce((s,a)=>s+a.channels.reduce((ss,c)=>ss+PIE_DEFS.filter(p=>c.pies?.[p.key]).length,0),0);
   document.getElementById('summary-stats').innerHTML=[[t('totalCanales'),tC],[t('totalMicros'),tM],[t('totalDIs'),tD],[t('totalPies'),tP],[t('artistas'),artists.length]]
@@ -4021,7 +4087,7 @@ function renderSummary(){
   const aH=artists.map((a,i)=>`<th class="mic-art-h" style="min-width:120px;background:${hex2rgba(ARTIST_COLORS[i%ARTIST_COLORS.length],0.3)};color:${ARTIST_COLORS[i%ARTIST_COLORS.length]}">${esc(a.nombre.slice(0,10))}</th>`).join('');
   const mR=S.micros.map(mic=>{
     const nm=typeof mic==='string'?mic:mic.nombre;
-    const cc=artists.map(a=>a.channels.filter(ch=>ch.micro===nm).length);
+    const cc=artists.map(a=>a.channels.filter(ch=>ch.micro===nm&&!ch.premontado).length);
     const isThisMicLocked=(typeof mic==='object'&&mic.locked)||S.micLocked;
     const mTotal=isThisMicLocked?Math.max(0,...cc):cc.reduce((s,n)=>s+n,0);
     const isLocked=(typeof mic==='object'&&mic.locked)||false;
@@ -4497,6 +4563,7 @@ function renderSubboxSVG(sb, slots, ownerArtistId){
 function computeLoadStats(artists){
   const micCount={};
   artists.forEach(a=>a.channels.forEach(ch=>{
+    if(ch.premontado)return; // ya montado (ej. ambientes fijos) — no se recuenta en Load Out
     if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));if(k&&k!=='XLR')micCount[k]=(micCount[k]||0)+1;}
   }));
   let diM=0,diST=0;
@@ -8247,6 +8314,7 @@ async function runPdfExport(){
       const micCount={};
       S.artists.forEach(a=>{
         a.channels.forEach(ch=>{
+          if(ch.premontado)return; // ya montado — no se recuenta en Load Out
           if(ch.micro){
             const k=normalizeGearName(cleanForPDF(ch.micro));
             if(k&&k!=='XLR') micCount[k]=(micCount[k]||0)+1;
