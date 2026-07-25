@@ -768,7 +768,7 @@ self.addEventListener('fetch',e=>e.respondWith(
     <div class="nav-item"        onclick="nav('orden')"   id="nav-orden"><span class="dot"></span>Orden del día</div>
     <div class="nav-item"        onclick="nav('summary')" id="nav-summary"><span class="dot"></span>Resumen microfonía</div>
     <div class="nav-item"        onclick="nav('rchlist')" id="nav-rchlist"><span class="dot"></span>Resumen CH List</div>
-    <div class="nav-item"        onclick="nav('sblist')"  id="nav-sblist"><span class="dot"></span>Resumen Subbox</div>
+    <div class="nav-item"        onclick="nav('sblist')"  id="nav-sblist"><span class="dot"></span>Resumen Mangueras</div>
     <div class="nav-item"        onclick="nav('loadout')" id="nav-loadout"><span class="dot"></span>Load Out</div>
   </div>
   <div class="nav-section nav-artist-list">
@@ -995,10 +995,10 @@ self.addEventListener('fetch',e=>e.respondWith(
     </div>
 
     <div class="card">
-      <div class="card-header"><span class="card-title">Configuración de Subboxes</span></div>
+      <div class="card-header"><span class="card-title">Configuración de Mangueras</span></div>
       <div class="card-body">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
-          <div class="field-label">Número de subboxes:</div>
+          <div class="field-label">Número de mangueras:</div>
           <input type="number" id="cfg-nsb" min="1" max="8" value="6" style="width:60px;text-align:center" oninput="updSubboxCount(this.value)">
           <span style="font-size:11px;color:var(--text3)">(máx. 8)</span>
         </div>
@@ -1222,7 +1222,7 @@ self.addEventListener('fetch',e=>e.respondWith(
     <div id="summary-stats" class="summary-grid"></div>
     <div class="card"><div class="card-header"><span class="card-title">Microfonía por artista</span></div><div id="mic-jump-btns" style="display:flex;gap:4px;flex-wrap:wrap;padding:6px 12px 4px;border-bottom:1px solid var(--border)"></div><div id="mic-summary-wrap" style="overflow-x:auto;overflow-y:visible;scroll-behavior:smooth;border-radius:0 0 var(--radius) var(--radius)"><table class="mic-table" id="mic-summary-table"></table></div></div>
     <div class="card"><div class="card-header"><span class="card-title">Pies de micrófono</span></div><div style="overflow-x:auto"><table class="mic-table" id="pies-summary-table"></table></div></div>
-    <div class="card"><div class="card-header"><span class="card-title">Subboxes utilizados</span></div><div style="overflow-x:auto"><table class="mic-table" id="subbox-summary-table"></table></div></div>
+    <div class="card"><div class="card-header"><span class="card-title">Mangueras utilizadas</span></div><div style="overflow-x:auto"><table class="mic-table" id="subbox-summary-table"></table></div></div>
   </div>
 
   <!-- RESUMEN CH LIST -->
@@ -1236,7 +1236,7 @@ self.addEventListener('fetch',e=>e.respondWith(
   <!-- RESUMEN SUBBOX -->
   <div class="page" id="page-sblist">
     <div class="card">
-      <div class="card-header"><span class="card-title">Resumen Subbox — todos los artistas</span></div>
+      <div class="card-header"><span class="card-title">Resumen Mangueras — todos los artistas</span></div>
       <div id="sblist-container"></div>
     </div>
   </div>
@@ -1292,7 +1292,7 @@ self.addEventListener('fetch',e=>e.respondWith(
             <input type="radio" name="pdf-chlist-mode" value="extended" id="pdf-mode-extended" checked style="accent-color:var(--accent)" onchange="window._pdfMode='extended'">
             <div>
               <div style="font-size:11px;font-weight:600;color:var(--text)">Extendido</div>
-              <div style="font-size:9px;color:var(--text3)">Horizontal · Subboxes, pies, obs</div>
+              <div style="font-size:9px;color:var(--text3)">Horizontal · Mangueras, pies, obs</div>
             </div>
           </label>
         </div>
@@ -1302,7 +1302,7 @@ self.addEventListener('fetch',e=>e.respondWith(
             <input type="checkbox" id="pdf-color-mode" style="accent-color:var(--accent)" onchange="window._pdfColor=this.checked" checked>
             <div>
               <div style="font-size:11px;font-weight:600;color:var(--text)">Impresión en color</div>
-              <div style="font-size:9px;color:var(--text3)">Subboxes con color · Desactiva para B/N con zebra</div>
+              <div style="font-size:9px;color:var(--text3)">Mangueras con color · Desactiva para B/N con zebra</div>
             </div>
           </label>
         </div>
@@ -1454,7 +1454,7 @@ const LANGS={
   es:{
     // Nav
     config:'Configuración',orden:'Orden del día',summary:'Resumen microfonía',
-    rchlist:'Resumen CH List',sblist:'Resumen Subbox',
+    rchlist:'Resumen CH List',sblist:'Resumen Mangueras',
     // File menu
     archivo:'Archivo',
     nuevo:'Nuevo CH List',abrir:'Abrir...',guardar:'Guardar',guardarComo:'Guardar como...',
@@ -1473,7 +1473,7 @@ const LANGS={
     inventarioMic:'Inventario de microfonía',addMicro:'+ Añadir',
     referencia:'Referencia',tipo:'Tipo',patronPolar:'Patrón polar',
     phantom48v:'48V',
-    configSubbox:'Configuración de Subboxes',numSubboxes:'Número de subboxes',max8:'(máx. 8)',
+    configSubbox:'Configuración de Mangueras',numSubboxes:'Número de mangueras',max8:'(máx. 8)',
     unMicPorLinea:'Un micrófono por línea',
     // Orden del día
     lineup:'Lineup',timeline:'Timeline',
@@ -1482,7 +1482,7 @@ const LANGS={
     horario:'Horario',duracion:'Duración',changeover:'Changeover',
     // Channel list
     instrumento:'Instrumento',canalStage:'Canal Stage',micro:'Micro',
-    observaciones:'Observaciones',subbox:'Subbox',di:'DI',
+    observaciones:'Observaciones',subbox:'Manguera',di:'DI',
     canalesLabel:'Canales:',
     conMicro:'Con micro',diMono:'DI Mono',diStereo:'DI Stereo',
     pieLbl:'Pie',propios:'Propios',
@@ -1490,11 +1490,11 @@ const LANGS={
     totalCanales:'Total canales',totalMicros:'Total micrófonos',
     totalDIs:'Total DIs',totalPies:'Total pies',artistas:'Artistas',
     micxArtista:'Microfonía por artista',piesMic:'Pies de micrófono',
-    subboxUsados:'Subboxes utilizados',
+    subboxUsados:'Mangueras utilizadas',
     sinDatos:'Sin datos',sinArtistas:'Sin artistas configurados',
     // Resumen CH list
     resumenCHList:'Resumen CH List — todos los artistas',
-    resumenSubbox:'Resumen Subbox — todos los artistas',
+    resumenSubbox:'Resumen Mangueras — todos los artistas',
     notasLabel:'Notas',notasPh:'Notas para este artista...',
     // PDF modal
     exportarPDF:'Exportar PDF',
@@ -1540,7 +1540,7 @@ const LANGS={
   },
   en:{
     config:'Settings',orden:'Schedule',summary:'Mic Summary',
-    rchlist:'CH List Summary',sblist:'Subbox Summary',
+    rchlist:'CH List Summary',sblist:'Manguera Summary',
     archivo:'File',
     nuevo:'New CH List',abrir:'Open...',guardar:'Save',guardarComo:'Save as...',
     exportPdf:'⬇ Export PDF',
@@ -1556,24 +1556,24 @@ const LANGS={
     inventarioMic:'Mic inventory',addMicro:'+ Add',
     referencia:'Reference',tipo:'Type',patronPolar:'Polar pattern',
     phantom48v:'48V',
-    configSubbox:'Subbox configuration',numSubboxes:'Number of subboxes',max8:'(max. 8)',
+    configSubbox:'Manguera configuration',numSubboxes:'Number of mangueras',max8:'(max. 8)',
     unMicPorLinea:'One microphone per line',
     lineup:'Lineup',timeline:'Timeline',
     venue:'Venue',fecha:'Date',artista:'Artist / Position',
     canales:'Channels',micros:'Microphones',sistema:'System / Notes',
     horario:'Schedule',duracion:'Duration',changeover:'Changeover',
     instrumento:'Instrument',canalStage:'Stage Channel',micro:'Mic',
-    observaciones:'Notes',subbox:'Subbox',di:'DI',
+    observaciones:'Notes',subbox:'Manguera',di:'DI',
     canalesLabel:'Channels:',
     conMicro:'With mic',diMono:'DI Mono',diStereo:'DI Stereo',
     pieLbl:'Stand',propios:'Own mics',
     totalCanales:'Total channels',totalMicros:'Total mics',
     totalDIs:'Total DIs',totalPies:'Total stands',artistas:'Artists',
     micxArtista:'Mics by artist',piesMic:'Mic stands',
-    subboxUsados:'Subboxes used',
+    subboxUsados:'Mangueras used',
     sinDatos:'No data',sinArtistas:'No artists configured',
     resumenCHList:'CH List Summary — all artists',
-    resumenSubbox:'Subbox Summary — all artists',
+    resumenSubbox:'Manguera Summary — all artists',
     notasLabel:'Notes',notasPh:'Notes for this artist...',
     exportarPDF:'Export PDF',
     seleccionaApartados:'Select which sections to include in the PDF:',
@@ -1997,18 +1997,30 @@ function fmtDate(d){if(!d)return'—';const[y,m,day]=d.split('-');return`${day}/
 // ── SUBBOX CONFIG ──
 function renderSBConfig(){
   const list=document.getElementById('sb-config-list');
-  list.innerHTML=S.subboxes.map((sb,i)=>`
+  list.innerHTML=S.subboxes.map((sb,i)=>{
+    const isFixed=(S.sbConfig?.fixedLines||[]).some(l=>l.sbLetter===sb.letter);
+    return `
     <div class="sb-config-row">
       <div class="sb-letter" style="color:${sb.color};font-weight:bold">${sb.letter}</div>
-      <input type="color" value="${sb.color}" title="Color del subbox ${sb.letter}"
+      <input type="color" value="${sb.color}" title="Color de la manguera ${sb.letter}"
         oninput="updSBColor(${i},this.value)" style="width:32px;height:28px;border-radius:4px;border:1px solid var(--border2);cursor:pointer;padding:1px;">
-      <span style="font-size:11px;color:var(--text2)">Subbox ${sb.letter}</span>
+      <span style="font-size:11px;color:var(--text2)">Manguera ${sb.letter}</span>
       <span style="font-size:10px;color:var(--text3);margin-left:4px">${sb.color}</span>
-    </div>`).join('');
+      ${isFixed?'':`
+      <span style="margin-left:auto;display:flex;align-items:center;gap:5px">
+        <span style="font-size:10px;color:var(--text3);white-space:nowrap">Subboxes:</span>
+        <input type="number" min="1" max="8" value="${sb.cajetines||1}" title="Cuántos cajetines/posiciones de escenario reparte esta manguera (comparten los mismos conectores)"
+          oninput="updSBCajetines(${i},this.value)" style="width:44px;text-align:center;font-size:11px">
+      </span>`}
+    </div>`}).join('');
+}
+function updSBCajetines(i,val){
+  S.subboxes[i].cajetines=Math.max(1,Math.min(8,parseInt(val)||1));
+  saveS();
 }
 function updSubboxCount(val){
   const n=Math.max(1,Math.min(8,parseInt(val)||1));
-  while(S.subboxes.length<n)S.subboxes.push({letter:SB_LETTERS[S.subboxes.length],color:DEFAULT_SB_COLORS[S.subboxes.length]||'#888'});
+  while(S.subboxes.length<n)S.subboxes.push({letter:SB_LETTERS[S.subboxes.length],color:DEFAULT_SB_COLORS[S.subboxes.length]||'#888',cajetines:1});
   S.subboxes=S.subboxes.slice(0,n);
   renderSBConfig();rebuildArtistPages();saveS();
 }
@@ -2239,7 +2251,7 @@ function buildArtistPage(a){
           <span style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:1px">${t('canalesLabel')}</span>
           <input type="number" value="${a.canales}" min="1" max="128" style="width:54px;text-align:center;padding:3px 6px" oninput="updACh(${a.id},this.value)">
           <button class="btn btn-sm" onclick="openRiderModal(${a.id})" style="white-space:nowrap;letter-spacing:.5px">✦ Importar rider</button>
-          <button class="btn btn-sm" id="sb-mode-btn-${a.id}" onclick="toggleSBVisual(${a.id})" title="Cambiar modo de asignación de subbox" style="white-space:nowrap;letter-spacing:.5px;font-size:10px">${_sbVisualMode.has(a.id)?'⌨ Numérico':'⊞ Visual'}</button>
+          <button class="btn btn-sm" id="sb-mode-btn-${a.id}" onclick="toggleSBVisual(${a.id})" title="Cambiar modo de asignación de manguera" style="white-space:nowrap;letter-spacing:.5px;font-size:10px">${_sbVisualMode.has(a.id)?'⌨ Numérico':'⊞ Visual'}</button>
         </div>
         <div class="ch-info-badges">
           <span class="badge badge-red"   id="bc-${a.id}">${a.canales} ch</span>
@@ -2363,7 +2375,7 @@ function validarPatch(aid, idx, sbLetter, valor){
   // Capacity check
   const cfg=S.sbConfig||{rows:2,cols:8};
   const maxSlot=(cfg.rows||2)*(cfg.cols||8);
-  if(num>maxSlot) return `Conector ${sbLetter}${num} no existe — Subbox ${sbLetter} tiene ${maxSlot} conectores`;
+  if(num>maxSlot) return `Conector ${sbLetter}${num} no existe — Manguera ${sbLetter} tiene ${maxSlot} conectores`;
 
   // Duplicate check within same artist
   const a=S.artists.find(a=>a.id===aid);
@@ -2509,7 +2521,7 @@ function openSlotChannelPicker(sbLetter, slot, ev, artistId){
   }
   const _title=overlay.querySelector('.sb-picker-title');
   if(_title) _title.style.color=sbColor;
-  document.getElementById('slot-ch-picker-title').textContent = 'Subbox '+sbLetter+' — Conector '+slot;
+  document.getElementById('slot-ch-picker-title').textContent = 'Manguera '+sbLetter+' — Conector '+slot;
 
   // Artists to show
   const artists = artistId ? S.artists.filter(a=>a.id===artistId) : S.artists;
@@ -2671,7 +2683,7 @@ function openSBPicker(artistId, chIdx, sbLetter){
   _sbPicker = {artistId, chIdx, sbLetter, sbColor: sb.color};
 
   // Populate header
-  document.getElementById('sb-picker-title').textContent = 'Subbox ' + sbLetter + ' — ' + (ch.instrumento||'Canal '+(chIdx+1)).toUpperCase();
+  document.getElementById('sb-picker-title').textContent = 'Manguera ' + sbLetter + ' — ' + (ch.instrumento||'Canal '+(chIdx+1)).toUpperCase();
   document.getElementById('sb-picker-sub').textContent = a.nombre.toUpperCase() + ' · Elige un conector o desasigna';
 
   // Build SVG with occupied slots highlighted
@@ -3872,7 +3884,7 @@ function renderSummary(){
       const total=counts.reduce((s,n)=>s+n,0);
       if(!total)return'';
       const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
-      return`<tr><td class="left">${dot}Subbox ${sb.letter}</td>${counts.map(n=>`<td class="${n?'':'zero'}">${n||'—'}</td>`).join('')}<td class="tcol">${total}</td></tr>`;
+      return`<tr><td class="left">${dot}Manguera ${sb.letter}</td>${counts.map(n=>`<td class="${n?'':'zero'}">${n||'—'}</td>`).join('')}<td class="tcol">${total}</td></tr>`;
     }).filter(Boolean).join('');
 
     // Fixed lines: show with their letter color + quantity (same across all artists)
@@ -3892,7 +3904,7 @@ function renderSummary(){
     const grandTotal=dynamicTotal+fixedQtyTotal;
     const totalRow=`<tr style="font-weight:700;border-top:2px solid var(--border2)"><td class="left" style="color:var(--accent)">TOTAL</td>${S.artists.map(()=>'<td></td>').join('')}<td class="tcol" style="color:var(--accent)">${grandTotal}</td></tr>`;
 
-    sbEl.innerHTML=`<thead><tr><th class="left">Subbox</th>${aH}<th>Unidades</th></tr></thead><tbody>${fixedRows}${sbR||''}${totalRow}</tbody>`;
+    sbEl.innerHTML=`<thead><tr><th class="left">Manguera</th>${aH}<th>Unidades</th></tr></thead><tbody>${fixedRows}${sbR||''}${totalRow}</tbody>`;
   }
 }
 
@@ -4187,7 +4199,7 @@ function renderSubboxSVG(sb, slots, ownerArtistId){
   const svgW=COLS*CW+PAD*2;
   const svgH=ROWS*CH+PAD*2+LABEL_H;
   let out=`<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;width:100%;padding-left:0"><div style="display:inline-block"><div style="display:flex;flex-direction:column;align-items:center;gap:6px">`;
-  out+=`<div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;font-weight:bold;color:${sb.color}">Subbox ${sb.letter}</div>`;
+  out+=`<div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;font-weight:bold;color:${sb.color}">Manguera ${sb.letter}</div>`;
   out+=`<svg width="${svgW}" height="${svgH}" style="display:block">`;
   out+=`<rect x="1" y="1" width="${svgW-2}" height="${svgH-2}" rx="7" fill="var(--bg3)" stroke="${sb.color}" stroke-width="1.5" opacity="0.9"/>`;
   out+=`<rect x="1" y="1" width="${svgW-2}" height="${LABEL_H}" rx="7" fill="${hex2rgba(sb.color,0.35)}"/>`;
@@ -4297,7 +4309,7 @@ function renderLoadOut(){
     if(ch.pies?.P)piP++;if(ch.pies?.R)piR++;
   }));
 
-  // Subboxes used — fixed count as 1, variable count once per artist that uses them
+  // Mangueras used — fixed count as 1, variable count once per artist that uses them
   const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
   const sbCount={}; // letter -> count
   S.subboxes.forEach(sb=>{
@@ -4331,8 +4343,16 @@ function renderLoadOut(){
       const sp=spare(n,0.25);rows.push({cat:"PIE",item:l,need:n,spare:sp,total:n+sp});
     });
   Object.entries(sbCount).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([letter,n])=>{
-    const label=fixedLetters.has(letter)?`Subbox ${letter} (manguera fija)`:`Subbox ${letter} (manguera)`;
+    const label=fixedLetters.has(letter)?`Manguera ${letter} (fija)`:`Manguera ${letter}`;
     rows.push({cat:"SUBBOX",item:label,need:n,spare:"—",total:n});
+    // Cajetines — physical breakout boxes this manguera is split across on stage.
+    // Only shown when >1: that's the whole point of the feature (one snake, several stage positions).
+    const sb=S.subboxes.find(s=>s.letter===letter);
+    const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
+    const cajetines=fixedLine?(fixedLine.quantity||1):(sb?.cajetines||1);
+    if(cajetines>1){
+      rows.push({cat:"SUBBOX",item:`↳ Cajetines — Manguera ${letter} ×${cajetines}`,need:cajetines,spare:"—",total:cajetines});
+    }
   });
 
   const catColor={MICRO:"var(--blue,#4fc3f7)",DI:"var(--green,#1de9b6)",PIE:"var(--amber,#f59e0b)",SUBBOX:"var(--accent)"};
@@ -4960,7 +4980,7 @@ function placePlanElement(aid,type,x,y){
     const sb=S.subboxes.find(s=>s.letter===letter);
     color=sb?.color||'#888';
     icon=letter;
-    label='Subbox '+letter;
+    label='Manguera '+letter;
   } else if(type==='corriente'){
     color='#ffffff';icon='⚡';label='Corriente';
   } else if(type==='nota'){
@@ -5382,9 +5402,9 @@ const TOUR_STEPS = [
   },
   {
     title: '3. Rellena el Channel List',
-    body: `<p style="font-size:13px;line-height:1.7;color:var(--text)">Cada artista tiene su tabla de canales. Las columnas de <b>Subbox</b> (A, B, C...) son donde asignas a qué conector físico va cada canal.</p>
+    body: `<p style="font-size:13px;line-height:1.7;color:var(--text)">Cada artista tiene su tabla de canales. Las columnas de <b>Manguera</b> (A, B, C...) son donde asignas a qué conector físico va cada canal.</p>
     <p style="font-size:12px;color:var(--text2);margin-top:8px">⚠️ <b>Patch físicamente imposible:</b> Si escribes un número de conector que no existe en la caja, o asignas el mismo conector a dos canales, la celda se pondrá en rojo y el artista mostrará un <span style="color:var(--accent);font-weight:900">⚠</span> en el menú lateral.</p>
-    <p style="font-size:12px;color:var(--text2);margin-top:6px">Puedes asignar conectores pinchando directamente en el <b>Resumen Subbox</b> — es más visual y evita errores.</p>`
+    <p style="font-size:12px;color:var(--text2);margin-top:6px">Puedes asignar conectores pinchando directamente en el <b>Resumen Mangueras</b> — es más visual y evita errores.</p>`
   },
   {
     title: '4. Exportar PDF',
@@ -5644,8 +5664,8 @@ function renderFixedLines(){
       <input type="text" value="${esc(ln.label||'')}" placeholder="Nombre (FOH, Sidefill...)" style="width:140px" oninput="updFixedLine(${i},'label',this.value)">
       <select style="width:60px" onchange="updFixedLine(${i},'sbLetter',this.value);renderFixedLines()">${selOpts}</select>
       <span style="font-size:11px;color:var(--text3)">×</span>
-      <input type="number" value="${ln.quantity||1}" min="1" max="16" style="width:50px" title="Cantidad de subboxes" oninput="updFixedLine(${i},'quantity',this.value)">
-      <span style="font-size:11px;color:var(--text3)">subbox(es)</span>
+      <input type="number" value="${ln.quantity||1}" min="1" max="16" style="width:50px" title="Cantidad de cajetines de esta manguera fija" oninput="updFixedLine(${i},'quantity',this.value)">
+      <span style="font-size:11px;color:var(--text3)">cajetín(es)</span>
       <button class="delete-btn" onclick="delFixedLine(${i})">✕</button>
     </div>`;
   }).join('');
@@ -6695,14 +6715,14 @@ function applyLang(){
   // ── Config subbox section label ──
   document.querySelectorAll('.card-title').forEach(el=>{
     const txt=el.textContent.trim();
-    if(txt==='Configuración de Subboxes'||txt==='Subbox configuration')el.textContent=t('configSubbox');
+    if(txt==='Configuración de Mangueras'||txt==='Manguera configuration')el.textContent=t('configSubbox');
     if(txt==='Datos del evento'||txt==='Event Details')el.textContent=t('datosEvento');
     if(txt==='Inventario de microfonía'||txt==='Mic inventory')el.textContent=t('inventarioMic');
     if(txt==='Lineup de artistas'||txt==='Artist lineup')el.textContent=t('lineupArtistas');
     if(txt==='Microfonía por artista'||txt==='Mics by artist')el.textContent=t('micxArtista');
     if(txt==='Pies de micrófono'||txt==='Mic stands')el.textContent=t('piesMic');
-    if(txt==='Subboxes utilizados'||txt==='Subboxes used')el.textContent=t('subboxUsados');
-    if(txt==='Resumen Subbox — todos los artistas'||txt==='Subbox Summary — all artists')el.textContent=t('resumenSubbox');
+    if(txt==='Mangueras utilizadas'||txt==='Mangueras used')el.textContent=t('subboxUsados');
+    if(txt==='Resumen Mangueras — todos los artistas'||txt==='Mangueras Summary — all artists')el.textContent=t('resumenSubbox');
     if(txt==='Resumen CH List — todos los artistas'||txt==='CH List Summary — all artists')el.textContent=t('resumenCHList');
   });
 
@@ -7538,7 +7558,7 @@ function getPdfSections(){
     {id:'summary',  label:'Resumen microfonía',   sub:'Totales y desglose',      pageId:'page-summary', checked:true},
     {id:'loadout',  label:'Load Out',             sub:'Material + spares',       pageId:'',             checked:true},
     {id:'rchlist',  label:'Resumen CH List',      sub:'Todos los artistas',      pageId:'page-rchlist', checked:true},
-    {id:'sblist',   label:'Resumen Subbox',       sub:'Diagrama visual',         pageId:'page-sblist',  checked:true},
+    {id:'sblist',   label:'Resumen Mangueras',       sub:'Diagrama visual',         pageId:'page-sblist',  checked:true},
   ];
   // Add one entry per artist CH list
   S.artists.forEach(a=>{
@@ -7622,7 +7642,7 @@ async function runPdfExport(){
         }
         const num=parseInt(val);
         if(isNaN(num)||num<1){
-          patchErrors.push(`"${a.nombre}" — Canal ${ci+1}: valor inválido "${val}" en Subbox ${sb.letter}`);
+          patchErrors.push(`"${a.nombre}" — Canal ${ci+1}: valor inválido "${val}" en Manguera ${sb.letter}`);
         } else if(num>maxSlot){
           patchErrors.push(`"${a.nombre}" — Canal ${ci+1}: conector ${sb.letter}${num} no existe (máx. ${maxSlot})`);
         } else if(seen[val]!==undefined){
@@ -7971,7 +7991,7 @@ async function runPdfExport(){
         });
       });
 
-      // ── 4. Subboxes — fixed count as 1, variable count per artist ──
+      // ── 4. Mangueras — fixed count as 1, variable count per artist ──
       const pdfFixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
       const pdfSbCount={};
       S.subboxes.forEach(sb=>{
@@ -8020,10 +8040,16 @@ async function runPdfExport(){
         rows.push(['PIE', label, n, sp, n+sp, '', '']);
       });
 
-      // Subboxes — one row per subbox, need = count of artists using it (or 1 if fixed)
+      // Mangueras — one row per manguera, plus a cajetines row when it spans multiple stage positions
       Object.entries(pdfSbCount).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([letter,n])=>{
-        const label=pdfFixedLetters.has(letter)?`Subbox ${letter} (manguera fija)`:`Subbox ${letter} (manguera)`;
+        const label=pdfFixedLetters.has(letter)?`Manguera ${letter} (fija)`:`Manguera ${letter}`;
         rows.push(['SUBBOX', label, n, '—', n, '', '']);
+        const sb=S.subboxes.find(s=>s.letter===letter);
+        const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
+        const cajetines=fixedLine?(fixedLine.quantity||1):(sb?.cajetines||1);
+        if(cajetines>1){
+          rows.push(['SUBBOX', `↳ Cajetines — Manguera ${letter} ×${cajetines}`, cajetines, '—', cajetines, '', '']);
+        }
       });
 
       pdf.autoTable({
@@ -8071,7 +8097,7 @@ async function runPdfExport(){
       // Legend
       const ly=pdf.lastAutoTable.finalY+6;
       pdf.setFont('helvetica','normal'); pdf.setFontSize(7); pdf.setTextColor(...GRAY3);
-      pdf.text('Spare = max(1, ceil(N × 0.15)) para micros/DIs  ·  max(1, ceil(N × 0.25)) para pies  ·  Subboxes sin spare recomendado', M, ly);
+      pdf.text('Spare = max(1, ceil(N × 0.15)) para micros/DIs  ·  max(1, ceil(N × 0.25)) para pies  ·  Mangueras sin spare recomendado', M, ly);
       addFooter(pdf,'Load Out', 210, 297);
     }
 
@@ -8201,7 +8227,7 @@ async function runPdfExport(){
             const cellX=M+col*cellW;
             const cellY=21+row*cellH;
 
-            prog.textContent=`Generando ${a.nombre} — Subbox ${sb.letter}...`;
+            prog.textContent=`Generando ${a.nombre} — Manguera ${sb.letter}...`;
             await new Promise(r=>setTimeout(r,5));
 
             const {svg, width:sw, height:sh}=buildSubboxSvgForPdf(sb, slots);
@@ -8219,7 +8245,7 @@ async function runPdfExport(){
 
             pdf.addImage(imgData,'PNG',imgX,imgY,imgW,imgH);
           }
-          addFooter(pdf,'Subbox  |  '+cleanForPDF(a.nombre));
+          addFooter(pdf,'Plano de escenario  |  '+cleanForPDF(a.nombre));
         }
       }
     }
