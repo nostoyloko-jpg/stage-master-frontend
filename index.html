@@ -1719,6 +1719,7 @@ function migrateA(a){
   if(a.soundcheckNotas===undefined)a.soundcheckNotas='';
   if(a.soundcheckInicio===undefined)a.soundcheckInicio='';
   if(a.soundcheckFin===undefined)a.soundcheckFin='';
+  if(!a.sbCajetines||typeof a.sbCajetines!=='object')a.sbCajetines={};
   if(!Array.isArray(a.channels))a.channels=[];
   const n=parseInt(a.canales)||48;
   while(a.channels.length<n)a.channels.push(emptyChannel());
@@ -1747,6 +1748,28 @@ function migrateA(a){
   return a;
 }
 function emptyChannel(){return{subboxes:{},instrumento:'',canalStage:'',micro:'',di:'',phantom:false,diLink:'',pies:{C:false,A:false,P:false,R:false},obs:''}}
+
+// ── Cajetines por manguera — configurado por artista (cada artista decide cuántos cajetines
+// necesita para su propia manguera, según su disposición de escenario) ──
+function getCajetinesTotal(letter){
+  const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
+  if(fixedLine) return fixedLine.quantity||1;
+  let total=0;
+  S.artists.forEach(a=>{
+    const used=a.channels.some(ch=>{
+      const v=(ch.subboxes?.[letter]||'').trim();
+      return v&&!isNaN(parseInt(v));
+    });
+    if(used) total+=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
+  });
+  return total;
+}
+function updSbCajetines(aid,letter,val){
+  const a=S.artists.find(x=>x.id===aid);if(!a)return;
+  if(!a.sbCajetines||typeof a.sbCajetines!=='object')a.sbCajetines={};
+  a.sbCajetines[letter]=Math.max(1,Math.min(8,parseInt(val)||1));
+  saveS();renderLoadOut();
+}
 
 // ── THEME ──
 let theme=SM_STORE.getSetting('theme','dark');
@@ -2006,17 +2029,8 @@ function renderSBConfig(){
         oninput="updSBColor(${i},this.value)" style="width:32px;height:28px;border-radius:4px;border:1px solid var(--border2);cursor:pointer;padding:1px;">
       <span style="font-size:11px;color:var(--text2)">Manguera ${sb.letter}</span>
       <span style="font-size:10px;color:var(--text3);margin-left:4px">${sb.color}</span>
-      ${isFixed?'':`
-      <span style="margin-left:auto;display:flex;align-items:center;gap:5px">
-        <span style="font-size:10px;color:var(--text3);white-space:nowrap">Subboxes:</span>
-        <input type="number" min="1" max="8" value="${sb.cajetines||1}" title="Cuántos cajetines/posiciones de escenario reparte esta manguera (comparten los mismos conectores)"
-          oninput="updSBCajetines(${i},this.value)" style="width:44px;text-align:center;font-size:11px">
-      </span>`}
+      ${isFixed?'<span style="margin-left:auto;font-size:10px;color:var(--text3);font-style:italic">Cajetines: fijo (ver Líneas fijas)</span>':'<span style="margin-left:auto;font-size:10px;color:var(--text3);font-style:italic">Cajetines: por artista, en su CH list</span>'}
     </div>`}).join('');
-}
-function updSBCajetines(i,val){
-  S.subboxes[i].cajetines=Math.max(1,Math.min(8,parseInt(val)||1));
-  saveS();
 }
 function updSubboxCount(val){
   const n=Math.max(1,Math.min(8,parseInt(val)||1));
@@ -2172,6 +2186,17 @@ function buildArtistPage(a){
   const sbGroupTh=`<th colspan="${sbs.length}" class="th-sb-group sb-col-group" style="color:#fff;background:var(--bg3)">SUBBOX</th>`;
   // individual subbox col headers
   const sbSubThs=sbs.map((sb,i)=>`<th class="sb-th-${i} sb-sub-col" style="width:34px;background:${hex2rgba(sb.color,0.40)};color:${sb.color}">${sb.letter}</th>`).join('');
+  // Cajetines por manguera — solo mangueras no fijas que este artista realmente usa
+  const fixedLettersSet=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
+  const usedSbLetters=sbs.filter(sb=>!fixedLettersSet.has(sb.letter)&&a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim()));
+  const cajetinesControls=usedSbLetters.map(sb=>{
+    const val=a.sbCajetines?.[sb.letter]||1;
+    return `<span style="display:inline-flex;align-items:center;gap:3px">
+      <span style="width:14px;height:14px;border-radius:3px;background:${hex2rgba(sb.color,0.4)};color:${sb.color};font-size:9px;font-weight:700;display:inline-flex;align-items:center;justify-content:center">${sb.letter}</span>
+      <input type="number" min="1" max="8" value="${val}" style="width:34px;text-align:center;font-size:11px;padding:2px 3px" title="Cajetines que este artista necesita para Manguera ${sb.letter}" oninput="updSbCajetines(${a.id},'${sb.letter}',this.value)">
+    </span>`;
+  }).join('');
+
   // pie group header
   const pieGroupTh=`<th colspan="${PIE_DEFS.length}" class="th-grp-pie pie-col" style="background:rgba(255,179,71,0.08)">PIE</th>`;
   const pieSubThs=PIE_DEFS.map(p=>`<th class="th-grp-pie pie-col" style="width:24px;background:rgba(255,179,71,0.06)" title="${p.label}">${p.key}</th>`).join('');
@@ -2252,6 +2277,10 @@ function buildArtistPage(a){
           <input type="number" value="${a.canales}" min="1" max="128" style="width:54px;text-align:center;padding:3px 6px" oninput="updACh(${a.id},this.value)">
           <button class="btn btn-sm" onclick="openRiderModal(${a.id})" style="white-space:nowrap;letter-spacing:.5px">✦ Importar rider</button>
           <button class="btn btn-sm" id="sb-mode-btn-${a.id}" onclick="toggleSBVisual(${a.id})" title="Cambiar modo de asignación de manguera" style="white-space:nowrap;letter-spacing:.5px;font-size:10px">${_sbVisualMode.has(a.id)?'⌨ Numérico':'⊞ Visual'}</button>
+          ${cajetinesControls?`<span style="display:flex;align-items:center;gap:8px;margin-left:6px;padding-left:10px;border-left:1px solid var(--border)">
+            <span style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap">Cajetines</span>
+            ${cajetinesControls}
+          </span>`:''}
         </div>
         <div class="ch-info-badges">
           <span class="badge badge-red"   id="bc-${a.id}">${a.canales} ch</span>
@@ -4346,11 +4375,10 @@ function renderLoadOut(){
     const label=fixedLetters.has(letter)?`Manguera ${letter} (fija)`:`Manguera ${letter}`;
     rows.push({cat:"SUBBOX",item:label,need:n,spare:"—",total:n});
     // Cajetines — physical breakout boxes this manguera is split across on stage.
-    // Only shown when >1: that's the whole point of the feature (one snake, several stage positions).
-    const sb=S.subboxes.find(s=>s.letter===letter);
-    const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
-    const cajetines=fixedLine?(fixedLine.quantity||1):(sb?.cajetines||1);
-    if(cajetines>1){
+    // Cada artista decide cuántos cajetines necesita para su propia manguera; se suman los distintos.
+    // Solo se muestra cuando el total pedido supera el nº de mangueras (n) — si no, es 1 cajetín por artista (por defecto).
+    const cajetines=getCajetinesTotal(letter);
+    if(cajetines>n){
       rows.push({cat:"SUBBOX",item:`↳ Cajetines — Manguera ${letter} ×${cajetines}`,need:cajetines,spare:"—",total:cajetines});
     }
   });
@@ -8044,10 +8072,8 @@ async function runPdfExport(){
       Object.entries(pdfSbCount).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([letter,n])=>{
         const label=pdfFixedLetters.has(letter)?`Manguera ${letter} (fija)`:`Manguera ${letter}`;
         rows.push(['SUBBOX', label, n, '—', n, '', '']);
-        const sb=S.subboxes.find(s=>s.letter===letter);
-        const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
-        const cajetines=fixedLine?(fixedLine.quantity||1):(sb?.cajetines||1);
-        if(cajetines>1){
+        const cajetines=getCajetinesTotal(letter);
+        if(cajetines>n){
           rows.push(['SUBBOX', `↳ Cajetines — Manguera ${letter} ×${cajetines}`, cajetines, '—', cajetines, '', '']);
         }
       });
