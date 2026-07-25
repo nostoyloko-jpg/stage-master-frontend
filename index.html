@@ -9387,7 +9387,10 @@ async function parseRiderAI() {
       // Heuristic: a real text-based PDF has a decent amount of text per page.
       // Below this threshold, the PDF is almost certainly a scanned image with no text layer.
       const perPageChars = (rawPdfText||'').length / Math.max(1, (pageList||[1]).length);
-      const looksScanned = !rawPdfText || perPageChars < 40;
+      // A real channel-list page has way more than a title line of text (dozens of channels,
+      // each with instrument/mic/notes). 40 chars/page let a scanned PDF's stray title text
+      // through as "has text" — raise the bar well above what a bare title/footer would produce.
+      const looksScanned = !rawPdfText || perPageChars < 200;
 
       if (looksScanned) {
         riderSetStatus('El PDF no tiene texto extraíble (parece escaneado) — usando análisis visual...', 'loading');
@@ -10301,8 +10304,9 @@ async function parseRiderOffline() {
       } catch(e){ console.warn('[picker]', e); }
       riderSetStatus('Extrayendo texto del PDF...', 'loading');
       const rawPdfText = await extractTextFromPDF(_riderFile, pageList);
-      if (!rawPdfText || rawPdfText.length < 10) {
-        riderSetStatus('No se pudo extraer texto del PDF. Usa la opción IA o exporta el rider como CSV/TXT.', 'err');
+      const perPageChars = (rawPdfText||'').length / Math.max(1, (pageList||[1]).length);
+      if (!rawPdfText || perPageChars < 200) {
+        riderSetStatus('Este PDF parece escaneado (sin texto real) — el parser offline no puede leerlo. Usa "Analizar con IA", que sí procesa la imagen.', 'err');
         return;
       }
       console.info('[offline RAW] length:', rawPdfText.length, 'has LISTADO:', rawPdfText.indexOf('LISTADO'), 'first 200:', rawPdfText.slice(0,200));
