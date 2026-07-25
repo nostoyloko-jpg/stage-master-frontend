@@ -9345,6 +9345,7 @@ async function parseRiderAI() {
   previewBox.style.display = 'none';
   applyBtn.style.display   = 'none';
   _riderTruncationWarning  = null;
+  let usedVision = false; // set true whenever this attempt goes through the vision (image) path
 
   try {
     const isImage   = _riderFile.type.startsWith('image/');
@@ -9367,6 +9368,7 @@ async function parseRiderAI() {
       const base64 = dataUrl.split(',')[1];
       const mediaType = _riderFile.type || 'image/png';
       riderSetStatus('Analizando con IA (visión)...', 'loading');
+      usedVision = true;
       result = await callBackendRiderParseImage({
         images: [{ data: base64, mediaType }],
         fileName: _riderFile.name || '',
@@ -9397,6 +9399,7 @@ async function parseRiderAI() {
         riderSetStatus('El PDF no tiene texto extraíble (parece escaneado) — usando análisis visual...', 'loading');
         const images = await rasterizePdfPagesToImages(_riderFile, pageList || [1]);
         riderSetStatus('Analizando con IA (visión)...', 'loading');
+        usedVision = true;
         result = await callBackendRiderParseImage({
           images,
           fileName: _riderFile.name || '',
@@ -9526,7 +9529,6 @@ async function parseRiderAI() {
     const msg = String(err?.message || '');
     console.warn('Backend rider parse failed:', msg);
 
-    const isImage = _riderFile?.type?.startsWith('image/');
     // Fix C: usar msg en lugar de err.message directamente
     const isBackendDown =
       msg.includes('Failed to fetch') ||
@@ -9535,9 +9537,11 @@ async function parseRiderAI() {
       err?.code === 'TIMEOUT'         ||
       err?.name === 'AbortError';
 
-    if (isImage && isBackendDown) {
-      // Images have no offline fallback (parser offline can't read pixels) — surface the error directly.
-      riderSetStatus('Servicio IA no disponible — inténtalo de nuevo en un momento.', 'err');
+    if (usedVision) {
+      // The offline parser can't read pixels at all, so falling back there just hides the
+      // real problem behind a generic "parece escaneado" message. Show the actual error instead.
+      const reason = isBackendDown ? 'Servicio IA no disponible — inténtalo de nuevo en un momento.' : ('Error del análisis visual: ' + msg.slice(0, 120));
+      riderSetStatus(reason, 'err');
       return;
     }
 
