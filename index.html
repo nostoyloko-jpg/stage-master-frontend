@@ -1223,7 +1223,7 @@ self.addEventListener('fetch',e=>e.respondWith(
     <div id="summary-stats" class="summary-grid"></div>
     <div class="card"><div class="card-header"><span class="card-title">Microfonía por artista</span></div><div id="mic-jump-btns" style="display:flex;gap:4px;flex-wrap:wrap;padding:6px 12px 4px;border-bottom:1px solid var(--border)"></div><div id="mic-summary-wrap" style="overflow-x:auto;overflow-y:visible;scroll-behavior:smooth;border-radius:0 0 var(--radius) var(--radius)"><table class="mic-table" id="mic-summary-table"></table></div></div>
     <div class="card"><div class="card-header"><span class="card-title">Pies de micrófono</span></div><div style="overflow-x:auto"><table class="mic-table" id="pies-summary-table"></table></div></div>
-    <div class="card"><div class="card-header"><span class="card-title">Mangueras utilizadas</span></div><div style="overflow-x:auto"><table class="mic-table" id="subbox-summary-table"></table></div></div>
+    <div class="card"><div class="card-header"><span class="card-title" id="subbox-summary-title">Cajetines utilizados</span></div><div style="overflow-x:auto"><table class="mic-table" id="subbox-summary-table"></table></div></div>
   </div>
 
   <!-- RESUMEN CH LIST -->
@@ -3879,26 +3879,138 @@ function renderOrden(){
 // Global tab state for Resumen microfonía
 let _summaryActiveTab='all';
 
+// Compute per-artist counts of mics, pies, cajetines (raw names, no normalization)
+function computeSummaryFor(artists){
+  const micCounts={};
+  artists.forEach(a=>a.channels.forEach(ch=>{
+    if(ch.micro) micCounts[ch.micro]=(micCounts[ch.micro]||0)+1;
+  }));
+  const piesCounts={C:0,A:0,P:0,R:0};
+  artists.forEach(a=>a.channels.forEach(ch=>{
+    PIE_DEFS.forEach(p=>{if(ch.pies?.[p.key])piesCounts[p.key]++;});
+  }));
+  const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
+  const cajetinesByLetter={};
+  S.subboxes.forEach(sb=>{
+    if(fixedLetters.has(sb.letter))return;
+    let sum=0;
+    artists.forEach(a=>{
+      const usesLetter=a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim());
+      if(usesLetter) sum+=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
+    });
+    if(sum) cajetinesByLetter[sb.letter]=sum;
+  });
+  return {micCounts,piesCounts,cajetinesByLetter};
+}
+
 function renderSummary(){
   const tabsEl=document.getElementById('summary-tabs');
   const days=groupArtistsByDate();
   const multiDay=days.length>1;
-  let artists=S.artists;
+  const validTabs=['all','max',...days.map((_,i)=>'day-'+i)];
+  if(!multiDay) _summaryActiveTab='all';
+  else if(!validTabs.includes(_summaryActiveTab)) _summaryActiveTab='all';
+
+  // Tab bar
   if(multiDay){
-    const validTabs=['all',...days.map((_,i)=>'day-'+i)];
-    if(!validTabs.includes(_summaryActiveTab))_summaryActiveTab='all';
     const tabBtn=(id,label,active)=>`<button onclick="window._summarySetTab('${id}')" style="background:${active?'var(--accent)':'var(--bg3)'};color:${active?'#fff':'var(--text2)'};border:1px solid ${active?'var(--accent)':'var(--border2)'};padding:6px 14px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;letter-spacing:.5px;text-transform:uppercase">${label}</button>`;
-    tabsEl.innerHTML=tabBtn('all','★ Todos',_summaryActiveTab==='all')+days.map((d,i)=>tabBtn('day-'+i,`${d.label} (${d.artists.length})`,_summaryActiveTab==='day-'+i)).join('');
+    tabsEl.innerHTML=[
+      tabBtn('max','★ Máximo festival',_summaryActiveTab==='max'),
+      tabBtn('all','Todos (suma)',_summaryActiveTab==='all'),
+      ...days.map((d,i)=>tabBtn('day-'+i,`${d.label} (${d.artists.length})`,_summaryActiveTab==='day-'+i))
+    ].join('');
     tabsEl.style.display='flex';
-    if(_summaryActiveTab!=='all'){
-      const idx=parseInt(_summaryActiveTab.replace('day-',''));
-      artists=days[idx]?.artists||S.artists;
-    }
   } else {
     tabsEl.innerHTML='';tabsEl.style.display='none';
-    _summaryActiveTab='all';
   }
   window._summarySetTab=function(id){_summaryActiveTab=id;renderSummary();};
+
+  // ──────────────────────────────────────────────────────────────────
+  // MAX MODE — simplified 2-column tables with max per element across days
+  // ──────────────────────────────────────────────────────────────────
+  if(_summaryActiveTab==='max' && multiDay){
+    const perDay=days.map(d=>({...d,stats:computeSummaryFor(d.artists)}));
+    // Aggregate maxes
+    const micMax={},piesMax={C:0,A:0,P:0,R:0},cajetinesMax={};
+    const allMics=new Set();perDay.forEach(d=>Object.keys(d.stats.micCounts).forEach(n=>allMics.add(n)));
+    allMics.forEach(n=>{micMax[n]=Math.max(...perDay.map(d=>d.stats.micCounts[n]||0));});
+    PIE_DEFS.forEach(p=>{piesMax[p.key]=Math.max(...perDay.map(d=>d.stats.piesCounts[p.key]||0));});
+    const allLetters=new Set();perDay.forEach(d=>Object.keys(d.stats.cajetinesByLetter).forEach(l=>allLetters.add(l)));
+    allLetters.forEach(l=>{cajetinesMax[l]=Math.max(...perDay.map(d=>d.stats.cajetinesByLetter[l]||0));});
+
+    // Stats cards — total max
+    const totC=Math.max(...perDay.map(d=>d.artists.reduce((s,a)=>s+a.canales,0)));
+    const totM=Object.values(micMax).reduce((s,n)=>s+n,0);
+    const totP=Object.values(piesMax).reduce((s,n)=>s+n,0);
+    const totCaj=Object.values(cajetinesMax).reduce((s,n)=>s+n,0);
+    const dayHint=`<div class="stat-card" style="opacity:.7"><div class="stat-label">DÍAS</div><div class="stat-value">${days.length}</div></div>`;
+    document.getElementById('summary-stats').innerHTML=
+      `<div class="stat-card"><div class="stat-label">Canales (máx./día)</div><div class="stat-value">${totC}</div></div>`+
+      `<div class="stat-card"><div class="stat-label">Micros (Σ máx.)</div><div class="stat-value">${totM}</div></div>`+
+      `<div class="stat-card"><div class="stat-label">Pies (Σ máx.)</div><div class="stat-value">${totP}</div></div>`+
+      `<div class="stat-card"><div class="stat-label">Cajetines (Σ máx.)</div><div class="stat-value">${totCaj}</div></div>`+
+      dayHint;
+
+    // Column header: one per day + Máximo
+    const dayCols=perDay.map(d=>`<th style="min-width:70px;text-align:center;color:var(--text2)">${esc(d.label)}</th>`).join('');
+    const totalCol=`<th style="min-width:70px;text-align:center;color:var(--accent);font-weight:900">MÁXIMO</th>`;
+
+    // Micros table
+    const mR=S.micros.map(mic=>{
+      const nm=typeof mic==='string'?mic:mic.nombre;
+      if(!micMax[nm])return'';
+      const cells=perDay.map(d=>{const n=d.stats.micCounts[nm]||0;return `<td class="${n?'':'zero'}" style="text-align:center">${n||''}</td>`;}).join('');
+      return`<tr><td class="left">${esc(nm)}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${micMax[nm]}</td></tr>`;
+    }).filter(Boolean).join('');
+    document.getElementById('mic-summary-table').innerHTML=`<thead><tr><th class="left">${t('micro')}</th>${dayCols}${totalCol}</tr></thead><tbody>${mR||`<tr><td colspan="${perDay.length+2}" class="empty-state">${t('sinDatos')}</td></tr>`}</tbody>`;
+
+    // Pies table
+    const pR=PIE_DEFS.map(p=>{
+      const cells=perDay.map(d=>{const n=d.stats.piesCounts[p.key]||0;return `<td class="${n?'':'zero'}" style="text-align:center">${n||''}</td>`;}).join('');
+      return`<tr><td class="left">${t('pieLbl')} ${t(p.lkey||'pieCorto')}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${piesMax[p.key]}</td></tr>`;
+    }).join('');
+    document.getElementById('pies-summary-table').innerHTML=`<thead><tr><th class="left">${t('pieLbl')}</th>${dayCols}${totalCol}</tr></thead><tbody>${pR}</tbody>`;
+
+    // Cajetines table
+    const sbEl=document.getElementById('subbox-summary-table');
+    const titleEl=document.getElementById('subbox-summary-title');
+    if(titleEl) titleEl.textContent='Cajetines utilizados (máximo por día)';
+    if(sbEl){
+      const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
+      const sbR=S.subboxes.filter(sb=>!fixedLetters.has(sb.letter)).map(sb=>{
+        if(!cajetinesMax[sb.letter])return'';
+        const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
+        const cells=perDay.map(d=>{const n=d.stats.cajetinesByLetter[sb.letter]||0;return `<td class="${n?'':'zero'}" style="text-align:center">${n||'—'}</td>`;}).join('');
+        return`<tr><td class="left">${dot}Manguera ${sb.letter}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${cajetinesMax[sb.letter]}</td></tr>`;
+      }).filter(Boolean).join('');
+      const fixedRows=(S.sbConfig?.fixedLines||[]).map(ln=>{
+        const sb=S.subboxes.find(s=>s.letter===ln.sbLetter);
+        const dot=sb?`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`:'';
+        const qty=ln.quantity||1;
+        const cells=perDay.map(()=>`<td style="color:var(--text3);font-style:italic;font-size:11px;text-align:center">—</td>`).join('');
+        return`<tr style="opacity:.75"><td class="left">${dot}⚓ ${esc(ln.label||'Fijo')} (${ln.sbLetter||'?'}×${qty})</td>${cells}<td class="tcol">${qty}</td></tr>`;
+      }).join('');
+      const totCajGrand=totCaj+(S.sbConfig?.fixedLines||[]).reduce((s,l)=>s+(l.quantity||1),0);
+      const totalRow=`<tr style="font-weight:700;border-top:2px solid var(--border2)"><td class="left" style="color:var(--accent)">TOTAL</td>${perDay.map(()=>'<td></td>').join('')}<td class="tcol" style="color:var(--accent)">${totCajGrand}</td></tr>`;
+      sbEl.innerHTML=`<thead><tr><th class="left">Manguera</th>${dayCols}${totalCol}</tr></thead><tbody>${fixedRows}${sbR}${totalRow}</tbody>`;
+    }
+    // Hide jump buttons in max mode
+    const micJumpEl=document.getElementById('mic-jump-btns');
+    if(micJumpEl) micJumpEl.innerHTML='';
+    return;
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // ALL / DAY-N MODE — per-artist columns as before
+  // ──────────────────────────────────────────────────────────────────
+  let artists=S.artists;
+  if(_summaryActiveTab.startsWith('day-')){
+    const idx=parseInt(_summaryActiveTab.replace('day-',''));
+    artists=days[idx]?.artists||S.artists;
+  }
+  // Reset the cajetines card title in case we came from max mode
+  const titleEl=document.getElementById('subbox-summary-title');
+  if(titleEl) titleEl.textContent='Cajetines utilizados';
 
   const tC=artists.reduce((s,a)=>s+a.canales,0);
   const tM=artists.reduce((s,a)=>s+a.channels.filter(c=>c.micro&&!isLineInput(c.micro)).length,0);
@@ -3917,20 +4029,16 @@ function renderSummary(){
     return mTotal?`<tr><td class="left">${lockMark}${esc(nm)}</td>${cc.map(n=>`<td class="${n?'':'zero'}">${n||''}</td>`).join('')}<td class="tcol" style="${isLocked?'color:var(--amber,#f59e0b)':''}">${mTotal}</td><td class="left" style="color:var(--text3)">${esc(nm)}</td></tr>`:'';
   }).join('');
   document.getElementById('mic-summary-table').innerHTML=`<thead><tr><th class="left">${t('micro')}</th>${aH}<th class="tcol">Total</th><th class="left mic-sticky-r" style="color:var(--text3)">${t('micro')}</th></tr></thead><tbody>${mR||`<tr><td colspan="${artists.length+3}" class="empty-state">${t('sinDatos')}</td></tr>`}</tbody>`;
-  // Mic summary wrap: ensure natural overflow scroll
   setTimeout(()=>{
     const wrap=document.getElementById('mic-summary-wrap');
     const tbl=document.getElementById('mic-summary-table');
     if(!wrap||!tbl) return;
-    // Clean up any old spacers from previous renders
     const old=wrap.querySelector('.mic-spacer,.mic-flex-wrap');
     if(old && old.parentNode===wrap){
-      // Re-attach table directly to wrap if it got nested
       if(old.contains(tbl)){ wrap.appendChild(tbl); old.remove(); }
     }
     wrap.style.maxWidth='100%';
   }, 50);
-  // Jump buttons
   const micJumpEl=document.getElementById('mic-jump-btns');
   if(micJumpEl){
     micJumpEl.innerHTML=artists.map((a,i)=>{
@@ -3938,7 +4046,6 @@ function renderSummary(){
       return `<button onclick="scrollMicSummaryTo(${i})" style="padding:2px 8px;border-radius:4px;border:1px solid ${color};background:transparent;color:${color};font-size:9px;font-weight:700;letter-spacing:.5px;cursor:pointer;font-family:var(--font);transition:all .12s;white-space:nowrap" onmouseover="this.style.background='${color}';this.style.color='#fff'" onmouseout="this.style.background='transparent';this.style.color='${color}'">${esc(a.nombre.slice(0,10))}</button>`;
     }).join('');
   }
-  // Apply max-width constraint after render
   setTimeout(()=>{
     const w=document.getElementById('mic-summary-wrap');
     if(w) w.style.maxWidth='100%';
@@ -3950,27 +4057,22 @@ function renderSummary(){
   }).join('');
   document.getElementById('pies-summary-table').innerHTML=`<thead><tr><th class="left">${t('pieLbl')}</th>${aH}<th>Total</th></tr></thead><tbody>${pR}</tbody>`;
 
-  // Subbox usage table — count units per artist and accumulate
+  // ── Cajetines table (was "Mangueras utilizadas") ──
+  // Now counts CAJETINES per artist (from a.sbCajetines[letter]), not just 1-per-artist.
   const sbEl=document.getElementById('subbox-summary-table');
   if(sbEl&&S.subboxes.length){
-    // fixedLines: letters that are fixed — count their quantity once (not per artist)
     const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
-
-    // For each subbox letter, count how many artists USE it (1 per artist that has ≥1 channel assigned)
-    // Fixed lines don't count per artist — they're already accounted for in the fixed section
     const sbR=S.subboxes.filter(sb=>!fixedLetters.has(sb.letter)).map(sb=>{
-      // Per artist: 1 if they use this subbox at all, 0 if not
       const counts=artists.map(a=>{
-        const used=a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim());
-        return used?1:0;
+        const usesLetter=a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim());
+        if(!usesLetter)return 0;
+        return Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
       });
       const total=counts.reduce((s,n)=>s+n,0);
       if(!total)return'';
       const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
       return`<tr><td class="left">${dot}Manguera ${sb.letter}</td>${counts.map(n=>`<td class="${n?'':'zero'}">${n||'—'}</td>`).join('')}<td class="tcol">${total}</td></tr>`;
     }).filter(Boolean).join('');
-
-    // Fixed lines: show with their letter color + quantity (same across all artists)
     const fixedRows=(S.sbConfig?.fixedLines||[]).map(ln=>{
       const sb=S.subboxes.find(s=>s.letter===ln.sbLetter);
       const dot=sb?`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`:'';
@@ -3978,16 +4080,16 @@ function renderSummary(){
       const fixedCells=artists.map(()=>`<td style="color:var(--text3);font-style:italic;font-size:11px">—</td>`).join('');
       return`<tr style="opacity:.75"><td class="left">${dot}⚓ ${esc(ln.label||'Fijo')} (${ln.sbLetter||'?'}×${qty})</td>${fixedCells}<td class="tcol">${qty}</td></tr>`;
     }).join('');
-
-    // Grand total row
     const dynamicTotal=S.subboxes.filter(sb=>!fixedLetters.has(sb.letter)).reduce((s,sb)=>{
-      return s+artists.filter(a=>a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim())).length;
+      return s+artists.reduce((ss,a)=>{
+        const usesLetter=a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim());
+        return ss+(usesLetter?Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1)):0);
+      },0);
     },0);
     const fixedQtyTotal=(S.sbConfig?.fixedLines||[]).reduce((s,l)=>s+(l.quantity||1),0);
     const grandTotal=dynamicTotal+fixedQtyTotal;
     const totalRow=`<tr style="font-weight:700;border-top:2px solid var(--border2)"><td class="left" style="color:var(--accent)">TOTAL</td>${artists.map(()=>'<td></td>').join('')}<td class="tcol" style="color:var(--accent)">${grandTotal}</td></tr>`;
-
-    sbEl.innerHTML=`<thead><tr><th class="left">Manguera</th>${aH}<th>Unidades</th></tr></thead><tbody>${fixedRows}${sbR||''}${totalRow}</tbody>`;
+    sbEl.innerHTML=`<thead><tr><th class="left">Manguera</th>${aH}<th>Cajetines</th></tr></thead><tbody>${fixedRows}${sbR||''}${totalRow}</tbody>`;
   }
 }
 
