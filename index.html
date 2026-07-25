@@ -4037,9 +4037,43 @@ function ensureRchPadding(wrap){
   wrap._padded = true;
 }
 
+// Global tab state for Resumen CH List
+let _rchActiveTab='all';
+
 function renderRchList(){
-  const maxCh=Math.max(...S.artists.map(a=>a.canales),0);
-  if(!maxCh||!S.artists.length){document.getElementById('rchlist-container').innerHTML=`<div class="empty-state">${t('sinArtistas')}</div>`;return;}
+  const cont=document.getElementById('rchlist-container');
+  if(!cont)return;
+  if(!S.artists.length){cont.innerHTML=`<div class="empty-state">${t('sinArtistas')}</div>`;return;}
+  const days=groupArtistsByDate();
+  const multiDay=days.length>1;
+
+  // Build tab bar if multi-day
+  let tabsHtml='';
+  let subset=S.artists;
+  if(multiDay){
+    const validTabs=['all',...days.map((_,i)=>'day-'+i)];
+    if(!validTabs.includes(_rchActiveTab))_rchActiveTab='all';
+    const tabBtn=(id,label,active)=>`<button onclick="window._rchSetTab('${id}')" style="background:${active?'var(--accent)':'var(--bg3)'};color:${active?'#fff':'var(--text2)'};border:1px solid ${active?'var(--accent)':'var(--border2)'};padding:6px 14px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;letter-spacing:.5px;text-transform:uppercase">${label}</button>`;
+    tabsHtml=`<div style="display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--bg2)">
+      ${tabBtn('all','★ Todos',_rchActiveTab==='all')}
+      ${days.map((d,i)=>tabBtn('day-'+i,`${d.label} (${d.artists.length})`,_rchActiveTab==='day-'+i)).join('')}
+    </div>`;
+    if(_rchActiveTab!=='all'){
+      const idx=parseInt(_rchActiveTab.replace('day-',''));
+      subset=days[idx]?.artists||S.artists;
+    }
+  }
+
+  const inner=renderRchListBody(subset);
+  cont.innerHTML=tabsHtml+inner;
+  renderRchListJumps();
+  setTimeout(initRchScroll,50);
+  window._rchSetTab=function(id){_rchActiveTab=id;renderRchList();};
+}
+
+function renderRchListBody(artists){
+  const maxCh=Math.max(...artists.map(a=>a.canales),0);
+  if(!maxCh||!artists.length)return `<div class="empty-state">${t('sinArtistas')}</div>`;
   const sbs=S.subboxes;
   const isSimple=viewMode==='simple'||document.body.classList.contains('simple');
 
@@ -4049,7 +4083,7 @@ function renderRchList(){
     const COLS_S=3;
     let notesRow=`<div style="display:flex;gap:0;border-bottom:1px solid var(--border);overflow-x:auto">`;
     notesRow+=`<div style="width:24px;flex-shrink:0;border-right:1px solid var(--border)"></div>`;
-    S.artists.forEach(a=>{
+    artists.forEach(a=>{
       notesRow+=`<div style="flex:0 0 ${COLS_S*80}px;border-right:1px solid var(--border);padding:4px 6px">
         <div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--text3);margin-bottom:2px">NOTAS — ${esc(a.nombre)}</div>
         <textarea style="width:100%;background:transparent;border:1px solid var(--border2);border-radius:3px;color:var(--text);font-family:var(--font);font-size:11px;padding:3px 6px;resize:vertical;min-height:36px"
@@ -4058,12 +4092,12 @@ function renderRchList(){
     });
     notesRow+=`</div>`;
     let h=`<tr><th class="nc-h" style="width:24px">#</th>`;
-    S.artists.forEach(a=>{h+=`<th class="art-h" colspan="${COLS_S}">${esc(a.nombre)}</th>`;});
+    artists.forEach(a=>{h+=`<th class="art-h" colspan="${COLS_S}">${esc(a.nombre)}</th>`;});
     h+=`<th class="nc-hr" style="width:24px">#</th></tr>`;
     let body='';
     for(let i=0;i<maxCh;i++){
       let row=`<tr><td class="nc">${i+1}</td>`;
-      S.artists.forEach(a=>{
+      artists.forEach(a=>{
         const ch=a.channels[i];
         if(!ch){row+=`<td colspan="${COLS_S}">—</td>`;}
         else{
@@ -4080,17 +4114,14 @@ function renderRchList(){
       });
       row+=`<td class="nc-r">${i+1}</td>`;body+=row+'</tr>';
     }
-    document.getElementById('rchlist-container').innerHTML=notesRow+`<div class="rchlist-wrap"><table class="rchlist-table"><thead>${h}</thead><tbody>${body}</tbody></table></div>`;
-    renderRchListJumps();
-    setTimeout(initRchScroll,50);
-    return;
+    return notesRow+`<div class="rchlist-wrap"><table class="rchlist-table"><thead>${h}</thead><tbody>${body}</tbody></table></div>`;
   }
 
   // EXTENDED MODE: full table with subbox columns
   const COLS=sbs.length+2;
   let notesRow=`<div style="display:flex;gap:0;border-bottom:1px solid var(--border);overflow-x:auto" id="rcl-notes-row">`;
   notesRow+=`<div style="width:28px;flex-shrink:0;border-right:1px solid var(--border);padding:4px 0"></div>`;
-  S.artists.forEach(a=>{
+  artists.forEach(a=>{
     notesRow+=`<div style="flex:0 0 ${COLS*38}px;border-right:1px solid var(--border);padding:4px 6px;">
       <div style="font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);margin-bottom:3px">NOTAS — ${esc(a.nombre)}</div>
       <textarea style="width:100%;background:transparent;border:1px solid var(--border2);border-radius:3px;color:var(--text);font-family:var(--font);font-size:11px;padding:4px 6px;resize:vertical;min-height:48px;line-height:1.4"
@@ -4100,9 +4131,9 @@ function renderRchList(){
   });
   notesRow+=`</div>`;
   let h=`<tr><th rowspan="2" class="nc-h" style="width:24px">#</th>`;
-  S.artists.forEach(a=>{h+=`<th class="art-h" colspan="${COLS}">${esc(a.nombre)}</th>`;});
+  artists.forEach(a=>{h+=`<th class="art-h" colspan="${COLS}">${esc(a.nombre)}</th>`;});
   h+=`<th rowspan="2" class="nc-hr" style="width:24px">#</th></tr><tr>`;
-  S.artists.forEach(()=>{
+  artists.forEach(()=>{
     sbs.forEach((sb,i)=>{h+=`<th class="sb-th-${i}" style="background:${hex2rgba(sb.color,0.40)};color:${sb.color};width:34px">${sb.letter}</th>`;});
     h+=`<th style="min-width:110px">${t('instrumento').toUpperCase().slice(0,6)}.</th><th style="min-width:100px">${t('micro').toUpperCase()}</th>`;
   });
@@ -4110,7 +4141,7 @@ function renderRchList(){
   let body='';
   for(let i=0;i<maxCh;i++){
     let row=`<tr><td class="nc">${i+1}</td>`;
-    S.artists.forEach(a=>{
+    artists.forEach(a=>{
       const ch=a.channels[i];
       if(!ch){row+=`<td colspan="${COLS}">—</td>`;}
       else{
@@ -4120,9 +4151,7 @@ function renderRchList(){
     });
     row+=`<td class="nc-r">${i+1}</td>`;body+=row+'</tr>';
   }
-  document.getElementById('rchlist-container').innerHTML=notesRow+`<div class="rchlist-wrap"><table class="rchlist-table"><thead>${h}</thead><tbody>${body}</tbody></table></div>`;
-  renderRchListJumps();
-  setTimeout(initRchScroll,50);
+  return notesRow+`<div class="rchlist-wrap"><table class="rchlist-table"><thead>${h}</thead><tbody>${body}</tbody></table></div>`;
 }
 
 function renderSbList(){
