@@ -9350,8 +9350,8 @@ async function callBackendRiderParse({ text, fileName = '', micList = '', sbLett
 async function callBackendRiderParseImage({ images, fileName = '', micList = '', sbLetters = '' }) {
   const url = `${BACKEND_CONFIG.baseUrl}/api/rider/parse`;
   const controller = new AbortController();
-  // Vision requests can take longer with several pages — give it more room than the text timeout.
-  const timeout = setTimeout(() => controller.abort(), Math.max(AI_CONFIG.requestTimeoutMs, 45000));
+  // Vision requests can take longer with several pages, plus a Render free-tier cold start — give it real room.
+  const timeout = setTimeout(() => controller.abort(), 115000);
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -9435,7 +9435,7 @@ async function parseRiderAI() {
       });
       const base64 = dataUrl.split(',')[1];
       const mediaType = _riderFile.type || 'image/png';
-      riderSetStatus('Analizando con IA (visión)...', 'loading');
+      riderSetStatus('Analizando con IA (visión)... puede tardar hasta 1-2 min si el servidor estaba dormido', 'loading');
       usedVision = true;
       result = await callBackendRiderParseImage({
         images: [{ data: base64, mediaType }],
@@ -9466,7 +9466,7 @@ async function parseRiderAI() {
       if (looksScanned) {
         riderSetStatus('El PDF no tiene texto extraíble (parece escaneado) — usando análisis visual...', 'loading');
         const images = await rasterizePdfPagesToImages(_riderFile, pageList || [1]);
-        riderSetStatus('Analizando con IA (visión)...', 'loading');
+        riderSetStatus('Analizando con IA (visión)... puede tardar hasta 1-2 min si el servidor estaba dormido', 'loading');
         usedVision = true;
         result = await callBackendRiderParseImage({
           images,
