@@ -9318,7 +9318,8 @@ async function rasterizePdfPagesToImages(file, pageList){
   for(const p of pageList){
     const page = await pdfDoc.getPage(p);
     // Scale 2.0 for good OCR-quality resolution without being excessive in size.
-    const viewport = page.getViewport({scale:2.0});
+    // Scale 2.5 gives sharper text for dense tables (50+ rows) without an excessive payload.
+    const viewport = page.getViewport({scale:2.5});
     const canvas = document.createElement('canvas');
     canvas.width = viewport.width;
     canvas.height = viewport.height;
