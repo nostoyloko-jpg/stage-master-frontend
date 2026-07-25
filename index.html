@@ -9278,6 +9278,58 @@ async function callBackendRiderParse({ text, fileName = '', micList = '', sbLett
   }
 }
 
+// images: [{data: base64 (no data: prefix), mediaType: 'image/png'}]
+async function callBackendRiderParseImage({ images, fileName = '', micList = '', sbLetters = '' }) {
+  const url = `${BACKEND_CONFIG.baseUrl}/api/rider/parse`;
+  const controller = new AbortController();
+  // Vision requests can take longer with several pages — give it more room than the text timeout.
+  const timeout = setTimeout(() => controller.abort(), Math.max(AI_CONFIG.requestTimeoutMs, 45000));
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-sm-token': getSmToken(),
+      },
+      body: JSON.stringify({ inputType: 'image', images, fileName, micList, sbLetters }),
+      signal: controller.signal,
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok) {
+      const err = new Error(data?.error || `HTTP ${res.status}`);
+      err.code = data?.code || 'BACKEND_ERROR';
+      throw err;
+    }
+    return data;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// Rasterize specific PDF pages (in the given order) to base64 PNG images for vision analysis.
+// pageList: array of 1-based page numbers, in the order to send.
+async function rasterizePdfPagesToImages(file, pageList){
+  const pdfjsLib = window.pdfjsLib;
+  if(!pdfjsLib) throw new Error('PDF.js not disponible');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const buf = await file.arrayBuffer();
+  const pdfDoc = await pdfjsLib.getDocument({data:buf}).promise;
+  const images = [];
+  for(const p of pageList){
+    const page = await pdfDoc.getPage(p);
+    // Scale 2.0 for good OCR-quality resolution without being excessive in size.
+    const viewport = page.getViewport({scale:2.0});
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({canvasContext: canvas.getContext('2d'), viewport}).promise;
+    const dataUrl = canvas.toDataURL('image/png');
+    const base64 = dataUrl.split(',')[1];
+    images.push({data: base64, mediaType: 'image/png'});
+  }
+  return images;
+}
+
 async function parseRiderAI() {
   if (!_riderFile) return;
 
@@ -9300,10 +9352,26 @@ async function parseRiderAI() {
     const sbLetters = S.subboxes.map(sb => sb.letter).join(', ');
 
     let text;
+    let result;
 
     if (isImage) {
-      riderSetStatus('Las imágenes se envían directamente al analizador...', 'loading');
-      throw new Error('image_not_supported_by_backend');
+      // Plain image file (PNG/JPG) — send directly to vision.
+      riderSetStatus('Enviando imagen al analizador...', 'loading');
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(_riderFile);
+      });
+      const base64 = dataUrl.split(',')[1];
+      const mediaType = _riderFile.type || 'image/png';
+      riderSetStatus('Analizando con IA (visión)...', 'loading');
+      result = await callBackendRiderParseImage({
+        images: [{ data: base64, mediaType }],
+        fileName: _riderFile.name || '',
+        micList, sbLetters,
+      });
+
     } else if (isPdf) {
       // Show page picker if PDF has multiple pages
       let pageList = null;
@@ -9316,26 +9384,47 @@ async function parseRiderAI() {
       } catch(e){ console.warn('[picker]', e); }
       riderSetStatus('Extrayendo texto del PDF...', 'loading');
       const rawPdfText = await extractTextFromPDF(_riderFile, pageList);
-      if (!rawPdfText || rawPdfText.length < 10) {
-        throw new Error('No se pudo extraer texto del PDF para el análisis IA.');
+      // Heuristic: a real text-based PDF has a decent amount of text per page.
+      // Below this threshold, the PDF is almost certainly a scanned image with no text layer.
+      const perPageChars = (rawPdfText||'').length / Math.max(1, (pageList||[1]).length);
+      const looksScanned = !rawPdfText || perPageChars < 40;
+
+      if (looksScanned) {
+        riderSetStatus('El PDF no tiene texto extraíble (parece escaneado) — usando análisis visual...', 'loading');
+        const images = await rasterizePdfPagesToImages(_riderFile, pageList || [1]);
+        riderSetStatus('Analizando con IA (visión)...', 'loading');
+        result = await callBackendRiderParseImage({
+          images,
+          fileName: _riderFile.name || '',
+          micList, sbLetters,
+        });
+      } else {
+        // Extract only the channel list section to avoid sending monitor tables, PA specs etc.
+        text = extractChannelSection(rawPdfText);
+        // Clean PDF extraction artifacts: isolated short tokens from rotated text
+        // e.g. "7\n0004\nORPSD" from rotated "DSPRO 4000" labels in tables
+        text = text
+          .split('\n')
+          .filter(line => {
+            const t = line.trim();
+            // Remove lines that are just short numbers or uppercase gibberish (PDF rotation artifacts)
+            if (/^\d{1,4}$/.test(t)) return false;               // lone numbers
+            if (/^[A-Z]{2,6}$/.test(t) && t.length <= 6) return false; // short ALL-CAPS artifacts like ORSPD, DSPRO
+            return true;
+          })
+          .join('\n');
+        if (text !== rawPdfText) {
+          console.info(`[PDF] Section extracted: ${text.length} chars of ${rawPdfText.length} total`);
+        }
+        riderSetStatus('Analizando con IA...', 'loading');
+        result = await callBackendRiderParse({
+          text,
+          fileName:  _riderFile.name || '',
+          micList,
+          sbLetters,
+        });
       }
-      // Extract only the channel list section to avoid sending monitor tables, PA specs etc.
-      text = extractChannelSection(rawPdfText);
-      // Clean PDF extraction artifacts: isolated short tokens from rotated text
-      // e.g. "7\n0004\nORPSD" from rotated "DSPRO 4000" labels in tables
-      text = text
-        .split('\n')
-        .filter(line => {
-          const t = line.trim();
-          // Remove lines that are just short numbers or uppercase gibberish (PDF rotation artifacts)
-          if (/^\d{1,4}$/.test(t)) return false;               // lone numbers
-          if (/^[A-Z]{2,6}$/.test(t) && t.length <= 6) return false; // short ALL-CAPS artifacts like ORSPD, DSPRO
-          return true;
-        })
-        .join('\n');
-      if (text !== rawPdfText) {
-        console.info(`[PDF] Section extracted: ${text.length} chars of ${rawPdfText.length} total`);
-      }
+
     } else {
       riderSetStatus('Leyendo archivo...', 'loading');
       text = await readFileAsText(_riderFile);
@@ -9343,16 +9432,14 @@ async function parseRiderAI() {
       if (printableRatio < 0.6) {
         throw new Error('El archivo parece estar en formato binario o comprimido.');
       }
+      riderSetStatus('Analizando con IA...', 'loading');
+      result = await callBackendRiderParse({
+        text,
+        fileName:  _riderFile.name || '',
+        micList,
+        sbLetters,
+      });
     }
-
-    riderSetStatus('Analizando con IA...', 'loading');
-
-    const result = await callBackendRiderParse({
-      text,
-      fileName:  _riderFile.name || '',
-      micList,
-      sbLetters,
-    });
 
     // Fix D: "contenido extraído" es más preciso que "del archivo"
     if (result.truncated) {
@@ -9443,11 +9530,10 @@ async function parseRiderAI() {
       msg.includes('CORS')            ||
       err?.code === 'TIMEOUT'         ||
       err?.name === 'AbortError';
-    const isImageUnsupported = msg === 'image_not_supported_by_backend';
 
-    if (isImage || isImageUnsupported) {
-      riderSetStatus('Las imágenes no están soportadas aún en esta versión. Usa un PDF o CSV.', 'err');
-      // Fix B: no resetear botones aquí — finally lo hace
+    if (isImage && isBackendDown) {
+      // Images have no offline fallback (parser offline can't read pixels) — surface the error directly.
+      riderSetStatus('Servicio IA no disponible — inténtalo de nuevo en un momento.', 'err');
       return;
     }
 
