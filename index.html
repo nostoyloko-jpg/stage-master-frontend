@@ -8992,10 +8992,42 @@ function riderRenderDebugPanel() {
   panel.innerHTML = html;
 }
 
+function riderInsertRow(idx){
+  const empty={instrumento:'',micro:'',di:'',phantom:false,obs:'',_confidence:1,_warnings:[]};
+  _riderParsed.splice(idx,0,empty);
+  riderRenderPreviewRows();
+  riderRefreshSummaryDebounced();
+  // focus the new row's instrumento input
+  setTimeout(()=>{
+    const row=document.getElementById('rpr-row-'+idx);
+    if(row){const inp=row.querySelector('input');inp&&inp.focus();}
+  },30);
+}
+
 function riderRenderPreviewRows() {
   const tbody = document.getElementById('rpr-tbody');
   if (!tbody) return;
   tbody.innerHTML = '';
+
+  function insertRowBar(idx){
+    const tr=document.createElement('tr');
+    tr.className='rpr-insert-bar';
+    const td=document.createElement('td');
+    td.colSpan=7;
+    td.style.cssText='padding:0;height:6px;position:relative';
+    const btn=document.createElement('button');
+    btn.textContent='+ Añadir canal aquí';
+    btn.title='Insertar un canal vacío entre estos dos';
+    btn.style.cssText='position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:var(--bg3);color:var(--text3);border:1px dashed var(--border2);border-radius:10px;font-size:9px;padding:1px 8px;cursor:pointer;opacity:0;transition:opacity .15s;letter-spacing:.5px;text-transform:uppercase;font-family:var(--font);white-space:nowrap';
+    tr.onmouseover=()=>{btn.style.opacity='1';btn.style.color='var(--accent)';btn.style.borderColor='var(--accent)';};
+    tr.onmouseout=()=>{btn.style.opacity='0';};
+    btn.onclick=()=>riderInsertRow(idx);
+    td.appendChild(btn);
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+
+  insertRowBar(0);
   _riderParsed.forEach((ch, i) => {
     const tr = document.createElement('tr');
     tr.id = 'rpr-row-' + i;
@@ -9106,6 +9138,7 @@ function riderRenderPreviewRows() {
 
     [tdNum, tdInstr, tdMic, tdDI, tdPh, tdObs, tdDel].forEach(td => tr.appendChild(td));
     tbody.appendChild(tr);
+    insertRowBar(i+1);
   });
 }
 function applyRiderImport() {
@@ -9272,8 +9305,17 @@ async function parseRiderAI() {
       riderSetStatus('Las imágenes se envían directamente al analizador...', 'loading');
       throw new Error('image_not_supported_by_backend');
     } else if (isPdf) {
+      // Show page picker if PDF has multiple pages
+      let pageList = null;
+      try {
+        pageList = await showRiderPagePicker(_riderFile);
+        if(pageList===null){
+          riderSetStatus('Cancelado por el usuario.', 'err');
+          return;
+        }
+      } catch(e){ console.warn('[picker]', e); }
       riderSetStatus('Extrayendo texto del PDF...', 'loading');
-      const rawPdfText = await extractTextFromPDF(_riderFile);
+      const rawPdfText = await extractTextFromPDF(_riderFile, pageList);
       if (!rawPdfText || rawPdfText.length < 10) {
         throw new Error('No se pudo extraer texto del PDF para el análisis IA.');
       }
@@ -9967,7 +10009,9 @@ function extractChannelSection(fullText) {
   return section;
 }
 
-async function extractTextFromPDF(file) {
+async function extractTextFromPDF(file, pageList) {
+  // pageList: optional array of 1-based page numbers, in the order to process.
+  // If omitted, processes pages 1..maxPdfPagesOffline in order.
   try {
     if(typeof pdfjsLib === 'undefined') throw new Error('PDF.js not loaded');
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -9976,20 +10020,25 @@ async function extractTextFromPDF(file) {
     let text = '';
     const totalPages = pdf.numPages;
     const pageLimit = AI_CONFIG.maxPdfPagesOffline;
-    const pagesToProcess = Math.min(totalPages, pageLimit);
-    if (totalPages > pageLimit) {
-      _riderTruncationWarning = `Solo se han procesado las primeras ${pageLimit} páginas de ${totalPages} en el modo offline.`;
+    let pagesToProcess;
+    if(Array.isArray(pageList) && pageList.length){
+      pagesToProcess = pageList.filter(p => p>=1 && p<=totalPages);
+    } else {
+      pagesToProcess = [];
+      const n = Math.min(totalPages, pageLimit);
+      for(let i=1;i<=n;i++) pagesToProcess.push(i);
+      if (totalPages > pageLimit) {
+        _riderTruncationWarning = `Solo se han procesado las primeras ${pageLimit} páginas de ${totalPages} en el modo offline.`;
+      }
     }
-    for (let i = 1; i <= pagesToProcess; i++) {
+    for (const i of pagesToProcess) {
       const page = await pdf.getPage(i);
       const content = await page.getTextContent();
       const items = content.items;
-      // Sort by y descending then x ascending to preserve reading order
       items.sort((a,b) => {
         const dy = b.transform[5] - a.transform[5];
         return Math.abs(dy) > 3 ? dy : a.transform[4] - b.transform[4];
       });
-      // Group into lines by y coordinate
       let lines = [], curLine = [], lastY = null;
       items.forEach(item => {
         const y = Math.round(item.transform[5]);
@@ -10009,6 +10058,143 @@ async function extractTextFromPDF(file) {
   }
 }
 
+// Selector de páginas del PDF del rider — con thumbnails, checkboxes y reorden por drag & drop.
+// Resuelve con un array de números de página (1-based) en el orden elegido, o null si cancela.
+async function showRiderPagePicker(file){
+  const pdfjsLib = window.pdfjsLib;
+  if(!pdfjsLib) return null;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const buf = await file.arrayBuffer();
+  const pdfDoc = await pdfjsLib.getDocument({data:buf}).promise;
+  const totalPages = pdfDoc.numPages;
+  if(totalPages<=1) return [1]; // sin selector necesario
+
+  return new Promise(resolve=>{
+    // Order: array of 1-based page numbers in selected order
+    let order = [];
+    for(let i=1;i<=totalPages;i++) order.push(i);
+
+    const modal=document.createElement('div');
+    modal.style.cssText='position:fixed;inset:0;z-index:30000;background:rgba(0,0,0,0.9);display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML=`
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:12px;max-width:920px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
+        <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+          <div>
+            <div style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);font-weight:700">Selecciona y ordena las páginas del rider</div>
+            <div style="font-size:10px;color:var(--text3);margin-top:2px">${esc(file.name)} · ${totalPages} páginas · Arrastra para reordenar · Desmarca para descartar</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button id="rpp-all" class="btn btn-sm">Todas</button>
+            <button id="rpp-none" class="btn btn-sm">Ninguna</button>
+            <button id="rpp-cancel" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:18px">✕</button>
+          </div>
+        </div>
+        <div id="rpp-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;padding:14px;overflow-y:auto;flex:1">
+          <div style="grid-column:1/-1;color:var(--text3);font-size:11px;text-align:center;padding:20px">Cargando miniaturas...</div>
+        </div>
+        <div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0">
+          <span id="rpp-count" style="font-size:11px;color:var(--text2)">— páginas seleccionadas</span>
+          <button id="rpp-go" class="btn btn-accent" style="margin-left:auto">Analizar con IA</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+
+    const grid=modal.querySelector('#rpp-grid');
+    const countEl=modal.querySelector('#rpp-count');
+    const goBtn=modal.querySelector('#rpp-go');
+
+    function selected(){return order.filter(p=>selectedSet.has(p));}
+    function updCount(){
+      const n=selected().length;
+      countEl.textContent = `${n} de ${totalPages} páginas seleccionadas`;
+      goBtn.disabled = n===0;
+      goBtn.style.opacity = n===0 ? '0.5' : '1';
+    }
+
+    const selectedSet=new Set(order); // by default all selected
+
+    function renderGrid(){
+      grid.innerHTML='';
+      order.forEach((p, idx)=>{
+        const cell=document.createElement('div');
+        cell.draggable=true;
+        cell.dataset.page=p;
+        cell.style.cssText='position:relative;cursor:grab;border:2px solid var(--border2);border-radius:6px;overflow:hidden;background:var(--bg3);transition:transform .1s,border-color .1s';
+        if(!selectedSet.has(p)){cell.style.opacity='0.35';cell.style.borderStyle='dashed';}
+
+        // Order badge
+        const badge=document.createElement('div');
+        badge.style.cssText='position:absolute;top:4px;left:4px;background:var(--accent);color:#fff;font-size:10px;font-weight:800;padding:1px 6px;border-radius:10px;z-index:2';
+        badge.textContent = selectedSet.has(p) ? (selected().indexOf(p)+1) : '—';
+        cell.appendChild(badge);
+
+        // Checkbox
+        const cbWrap=document.createElement('label');
+        cbWrap.style.cssText='position:absolute;top:4px;right:4px;background:rgba(0,0,0,.6);border-radius:3px;padding:2px 4px;cursor:pointer;z-index:2;display:flex;align-items:center;gap:3px';
+        const cb=document.createElement('input');
+        cb.type='checkbox';cb.checked=selectedSet.has(p);
+        cb.style.cssText='accent-color:var(--accent);cursor:pointer';
+        cb.onclick=(e)=>{
+          e.stopPropagation();
+          if(cb.checked) selectedSet.add(p); else selectedSet.delete(p);
+          renderGrid();updCount();
+        };
+        cbWrap.appendChild(cb);
+        cell.appendChild(cbWrap);
+
+        // Canvas
+        const cv=document.createElement('canvas');
+        cv.style.cssText='width:100%;display:block';
+        cell.appendChild(cv);
+
+        // Label
+        const lbl=document.createElement('div');
+        lbl.style.cssText='font-size:10px;color:var(--text3);text-align:center;padding:4px 0;background:var(--bg3);letter-spacing:.5px';
+        lbl.textContent = 'Página ' + p;
+        cell.appendChild(lbl);
+
+        // Drag & drop
+        cell.ondragstart=(e)=>{e.dataTransfer.setData('text/plain',String(p));cell.style.opacity='0.4';};
+        cell.ondragend=()=>{renderGrid();};
+        cell.ondragover=(e)=>{e.preventDefault();cell.style.borderColor='var(--accent)';};
+        cell.ondragleave=()=>{cell.style.borderColor='var(--border2)';};
+        cell.ondrop=(e)=>{
+          e.preventDefault();
+          const from=parseInt(e.dataTransfer.getData('text/plain'));
+          const to=p;
+          if(from===to)return;
+          const fromIdx=order.indexOf(from);
+          const toIdx=order.indexOf(to);
+          if(fromIdx<0||toIdx<0)return;
+          order.splice(fromIdx,1);
+          order.splice(toIdx,0,from);
+          renderGrid();updCount();
+        };
+
+        grid.appendChild(cell);
+
+        pdfDoc.getPage(p).then(page=>{
+          const vp=page.getViewport({scale:0.3});
+          cv.width=vp.width; cv.height=vp.height;
+          page.render({canvasContext:cv.getContext('2d'),viewport:vp});
+        });
+      });
+    }
+
+    modal.querySelector('#rpp-all').onclick=()=>{order.forEach(p=>selectedSet.add(p));renderGrid();updCount();};
+    modal.querySelector('#rpp-none').onclick=()=>{selectedSet.clear();renderGrid();updCount();};
+    modal.querySelector('#rpp-cancel').onclick=()=>{modal.remove();resolve(null);};
+    modal.querySelector('#rpp-go').onclick=()=>{
+      const sel=selected();
+      if(!sel.length)return;
+      modal.remove();
+      resolve(sel);
+    };
+
+    renderGrid();updCount();
+  });
+}
+
 async function parseRiderOffline() {
   if (!_riderFile) return;
   _riderTruncationWarning = null; // reset
@@ -10019,8 +10205,16 @@ async function parseRiderOffline() {
   try {
     let text = '';
     if (_riderFile.type === 'application/pdf') {
+      let pageList = null;
+      try {
+        pageList = await showRiderPagePicker(_riderFile);
+        if(pageList===null){
+          riderSetStatus('Cancelado por el usuario.', 'err');
+          return;
+        }
+      } catch(e){ console.warn('[picker]', e); }
       riderSetStatus('Extrayendo texto del PDF...', 'loading');
-      const rawPdfText = await extractTextFromPDF(_riderFile);
+      const rawPdfText = await extractTextFromPDF(_riderFile, pageList);
       if (!rawPdfText || rawPdfText.length < 10) {
         riderSetStatus('No se pudo extraer texto del PDF. Usa la opción IA o exporta el rider como CSV/TXT.', 'err');
         return;
