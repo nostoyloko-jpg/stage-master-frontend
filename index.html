@@ -2388,6 +2388,12 @@ function buildArtistPage(a){
           <span class="badge badge-blue"  id="bpr-${a.id}">—</span>
         </div>
       </div>
+      <div style="padding:8px 14px;border-bottom:1px solid var(--border);background:var(--bg2)">
+        <div style="font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);margin-bottom:3px">${t('notasLabel').toUpperCase()}</div>
+        <textarea id="artist-notas-${a.id}" style="width:100%;max-width:720px;background:var(--inp-bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--font);font-size:11px;padding:5px 8px;resize:vertical;min-height:34px;line-height:1.5;display:block"
+          placeholder="${t('notasPh')}"
+          oninput="updArtistNotas(${a.id},this.value)">${esc(a.notas||'')}</textarea>
+      </div>
       <div class="ch-wrap">
         <table class="ch-table" id="cht-${a.id}">
           <thead>
@@ -2544,6 +2550,20 @@ function resetArtistColumn(aid, kind){
   });
   updBadges(a);updChSum(a);debouncedSave();debouncedSnapshot();
   rebuildArtistPages();
+}
+
+// One shared notes field per artist, rendered in several places (CH list, Resumen CH List,
+// Resumen Cajetines). Mirror the value into the other visible copies as you type, without
+// re-rendering — a re-render here would steal focus mid-typing.
+function updArtistNotas(aid, value){
+  const a=S.artists.find(x=>x.id===aid);if(!a)return;
+  a.notas=value;
+  document.querySelectorAll(`[data-notas-for="${aid}"]`).forEach(el=>{
+    if(el.value!==value) el.value=value;
+  });
+  const own=document.getElementById('artist-notas-'+aid);
+  if(own && own.value!==value) own.value=value;
+  debouncedSave();
 }
 
 function toggleArtistReutilizable(aid){
@@ -4404,7 +4424,7 @@ function renderRchListBody(artists){
       notesRow+=`<div style="flex:0 0 ${COLS_S*80}px;border-right:1px solid var(--border);padding:4px 6px">
         <div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--text3);margin-bottom:2px">NOTAS — ${esc(a.nombre)}</div>
         <textarea style="width:100%;background:transparent;border:1px solid var(--border2);border-radius:3px;color:var(--text);font-family:var(--font);font-size:11px;padding:3px 6px;resize:vertical;min-height:36px"
-          oninput="S.artists.find(a=>a.id===${a.id}).notas=this.value;saveS()">${esc(a.notas||'')}</textarea>
+          data-notas-for="${a.id}" oninput="updArtistNotas(${a.id},this.value)">${esc(a.notas||'')}</textarea>
       </div>`;
     });
     notesRow+=`</div>`;
@@ -4443,7 +4463,7 @@ function renderRchListBody(artists){
       <div style="font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);margin-bottom:3px">NOTAS — ${esc(a.nombre)}</div>
       <textarea style="width:100%;background:transparent;border:1px solid var(--border2);border-radius:3px;color:var(--text);font-family:var(--font);font-size:11px;padding:4px 6px;resize:vertical;min-height:48px;line-height:1.4"
         placeholder="${t('notasPh')}"
-        oninput="S.artists.find(a=>a.id===${a.id}).notas=this.value;saveS()">${esc(a.notas||'')}</textarea>
+        data-notas-for="${a.id}" oninput="updArtistNotas(${a.id},this.value)">${esc(a.notas||'')}</textarea>
     </div>`;
   });
   notesRow+=`</div>`;
@@ -4577,7 +4597,7 @@ function renderSbListBody(artists){
     html+=`</div>`;
     html+=`<textarea style="width:100%;max-width:640px;background:var(--inp-bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--font);font-size:11px;padding:5px 8px;resize:vertical;min-height:28px;line-height:1.5;margin-bottom:12px;display:block"
       placeholder="Notas para ${esc(a.nombre)}..."
-      oninput="S.artists.find(x=>x.id===${a.id}).notas=this.value;saveS()">${esc(a.notas||'')}</textarea>`;
+      data-notas-for="${a.id}" oninput="updArtistNotas(${a.id},this.value)">${esc(a.notas||'')}</textarea>`;
     html+=`<div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">`;
 
     varSbs.forEach(sb=>{
@@ -4617,7 +4637,7 @@ function renderSbListBody(artists){
         html+=`<div style="font-size:10px;color:var(--accent);font-weight:700;letter-spacing:1px;margin-bottom:4px">${esc(a.nombre)}</div>`;
         html+=`<textarea style="width:100%;max-width:640px;background:var(--inp-bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--font);font-size:11px;padding:5px 8px;resize:vertical;min-height:28px;line-height:1.5;display:block"
           placeholder="Notas..."
-          oninput="S.artists.find(x=>x.id===${a.id}).notas=this.value;saveS()">${esc(a.notas||'')}</textarea>`;
+          data-notas-for="${a.id}" oninput="updArtistNotas(${a.id},this.value)">${esc(a.notas||'')}</textarea>`;
         html+=`</div>`;
       });
       html+=`</div>`;
