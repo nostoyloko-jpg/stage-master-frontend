@@ -2395,10 +2395,10 @@ function buildArtistPage(a){
               ${sbGroupTh}
               <th rowspan="2" class="tleft" style="min-width:100px">${t('instrumento').toUpperCase()}</th>
               <th rowspan="2" class="cs-col" style="width:38px" title="${t('canalStage')}">${t('canalStage').toUpperCase()}</th>
-              <th rowspan="2" style="min-width:95px">${t('micro').toUpperCase()}</th>
+              <th rowspan="2" style="min-width:95px;position:relative">${t('micro').toUpperCase()}<button type="button" onclick="event.stopPropagation();resetArtistColumn(${a.id},'micro')" title="Vaciar toda la columna de micros de este artista" style="position:absolute;top:2px;right:2px;width:14px;height:14px;border:none;border-radius:3px;background:transparent;color:var(--text3);cursor:pointer;font-size:10px;line-height:14px;padding:0">⟲</button></th>
               <th rowspan="2" class="di-col" style="width:54px">${t('di').toUpperCase()}</th>
               <th rowspan="2" class="phantom-col" style="width:28px" title="${t('phantom48v')}">${t('phantom48v')}</th>
-              <th ${isPieCheckboxMode?'':'rowspan="2"'} class="pie-col" style="${isPieCheckboxMode?'':'width:78px;'}background:rgba(255,179,71,0.08);cursor:pointer" ${isPieCheckboxMode?`colspan="${PIE_DEFS.length}"`:''} onclick="togglePieMode(${a.id})" title="${isPieCheckboxMode?'Clic para cambiar a lista desplegable':'Clic para cambiar a checkboxes'}">PIE <span style="opacity:.5;font-size:9px">⇄</span></th>
+              <th ${isPieCheckboxMode?'':'rowspan="2"'} class="pie-col" style="${isPieCheckboxMode?'':'width:78px;'}background:rgba(255,179,71,0.08);cursor:pointer;position:relative" ${isPieCheckboxMode?`colspan="${PIE_DEFS.length}"`:''} onclick="togglePieMode(${a.id})" title="${isPieCheckboxMode?'Clic para cambiar a lista desplegable':'Clic para cambiar a checkboxes'}">PIE <span style="opacity:.5;font-size:9px">⇄</span><button type="button" onclick="event.stopPropagation();resetArtistColumn(${a.id},'pie')" title="Vaciar toda la columna de pies de este artista" style="position:absolute;top:2px;right:2px;width:14px;height:14px;border:none;border-radius:3px;background:transparent;color:var(--text3);cursor:pointer;font-size:10px;line-height:14px;padding:0">⟲</button></th>
               <th rowspan="2" class="tleft" style="min-width:110px">${t('observaciones').toUpperCase()}</th>
             </tr>
             <tr class="thead-extended">${sbSubThs}${isPieCheckboxMode?pieSubThs:''}</tr>
@@ -2526,6 +2526,24 @@ function getDiLinkPartnerIdx(a, idx){
 // Sets the mic-stand type as a single choice (dropdown) while keeping the underlying
 // ch.pies={C,A,P,R} object model intact — so Load Out/Resumen/PDF export (which all read
 // ch.pies?.[key]) keep working unchanged. Also mirrors to the stereo-pair link partner, if any.
+// Clears an entire column (Micro or Pie) for every channel of one artist in one go.
+function resetArtistColumn(aid, kind){
+  const a=S.artists.find(x=>x.id===aid);if(!a)return;
+  const label = kind==='micro' ? 'micrófonos (y 48V)' : 'pies de micro';
+  if(!confirm(`¿Vaciar toda la columna de ${label} de "${a.nombre}"?\nEsta acción no se puede deshacer.`)) return;
+  a.channels.forEach(ch=>{
+    if(kind==='micro'){
+      ch.micro='';
+      ch.phantom=false;
+    } else if(kind==='pie'){
+      if(!ch.pies)ch.pies={};
+      PIE_DEFS.forEach(p=>{ch.pies[p.key]=false;});
+    }
+  });
+  updBadges(a);updChSum(a);debouncedSave();debouncedSnapshot();
+  rebuildArtistPages();
+}
+
 function updChPieType(aid,idx,value){
   const a=S.artists.find(a=>a.id===aid);if(!a||!a.channels[idx])return;
   const ch=a.channels[idx];
