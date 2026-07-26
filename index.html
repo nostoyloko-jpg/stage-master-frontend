@@ -4155,16 +4155,17 @@ function renderSummary(){
       const nm=typeof mic==='string'?mic:mic.nombre;
       if(!micMax[nm])return'';
       const cells=perDay.map(d=>{const n=d.stats.micCounts[nm]||0;return `<td class="${n?'':'zero'}" style="text-align:center">${n||''}</td>`;}).join('');
-      return`<tr><td class="left">${esc(nm)}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${micMax[nm]}</td></tr>`;
+      return`<tr><td class="left">${esc(nm)}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${micMax[nm]}</td><td class="left mic-sticky-r" style="color:var(--text3)">${esc(nm)}</td></tr>`;
     }).filter(Boolean).join('');
-    document.getElementById('mic-summary-table').innerHTML=`<thead><tr><th class="left">${t('micro')}</th>${dayCols}${totalCol}</tr></thead><tbody>${mR||`<tr><td colspan="${perDay.length+2}" class="empty-state">${t('sinDatos')}</td></tr>`}</tbody>`;
+    document.getElementById('mic-summary-table').innerHTML=`<thead><tr><th class="left">${t('micro')}</th>${dayCols}${totalCol}<th class="left mic-sticky-r" style="color:var(--text3)">${t('micro')}</th></tr></thead><tbody>${mR||`<tr><td colspan="${perDay.length+3}" class="empty-state">${t('sinDatos')}</td></tr>`}</tbody>`;
 
     // Pies table
     const pR=PIE_DEFS.map(p=>{
       const cells=perDay.map(d=>{const n=d.stats.piesCounts[p.key]||0;return `<td class="${n?'':'zero'}" style="text-align:center">${n||''}</td>`;}).join('');
-      return`<tr><td class="left">${t('pieLbl')} ${t(p.lkey||'pieCorto')}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${piesMax[p.key]}</td></tr>`;
+      const lbl=`${t('pieLbl')} ${t(p.lkey||'pieCorto')}`;
+      return`<tr><td class="left">${lbl}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${piesMax[p.key]}</td><td class="left mic-sticky-r" style="color:var(--text3)">${lbl}</td></tr>`;
     }).join('');
-    document.getElementById('pies-summary-table').innerHTML=`<thead><tr><th class="left">${t('pieLbl')}</th>${dayCols}${totalCol}</tr></thead><tbody>${pR}</tbody>`;
+    document.getElementById('pies-summary-table').innerHTML=`<thead><tr><th class="left">${t('pieLbl')}</th>${dayCols}${totalCol}<th class="left mic-sticky-r" style="color:var(--text3)">${t('pieLbl')}</th></tr></thead><tbody>${pR}</tbody>`;
 
     // Cajetines table
     const sbEl=document.getElementById('subbox-summary-table');
@@ -4176,10 +4177,10 @@ function renderSummary(){
         if(!cajetinesMax[sb.letter])return'';
         const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
         const cells=perDay.map(d=>{const n=d.stats.cajetinesByLetter[sb.letter]||0;return `<td class="${n?'':'zero'}" style="text-align:center">${n||'—'}</td>`;}).join('');
-        let out=`<tr><td class="left">${dot}Manguera ${sb.letter}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${cajetinesMax[sb.letter]}</td></tr>`;
+        let out=`<tr><td class="left">${dot}Manguera ${sb.letter}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${cajetinesMax[sb.letter]}</td><td class="left mic-sticky-r" style="color:var(--text3)">${dot}Manguera ${sb.letter}</td></tr>`;
         if(cablesMax[sb.letter]){
           const cableCells=perDay.map(d=>{const n=d.stats.linkCablesByLetter?.[sb.letter]||0;return `<td class="${n?'':'zero'}" style="text-align:center;color:var(--text3);font-size:11px">${n||'—'}</td>`;}).join('');
-          out+=`<tr style="opacity:.8"><td class="left" style="padding-left:22px;font-size:11px;color:var(--text3)">↳ Cables link</td>${cableCells}<td class="tcol" style="font-size:11px;color:var(--text3)">${cablesMax[sb.letter]}</td></tr>`;
+          out+=`<tr style="opacity:.8"><td class="left" style="padding-left:22px;font-size:11px;color:var(--text3)">↳ Cables link</td>${cableCells}<td class="tcol" style="font-size:11px;color:var(--text3)">${cablesMax[sb.letter]}</td><td class="left mic-sticky-r" style="padding-left:22px;font-size:11px;color:var(--text3)">↳ Cables link ${sb.letter}</td></tr>`;
         }
         return out;
       }).filter(Boolean).join('');
@@ -4188,11 +4189,12 @@ function renderSummary(){
         const dot=sb?`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`:'';
         const qty=ln.quantity||1;
         const cells=perDay.map(()=>`<td style="color:var(--text3);font-style:italic;font-size:11px;text-align:center">—</td>`).join('');
-        return`<tr style="opacity:.75"><td class="left">${dot}⚓ ${esc(ln.label||'Fijo')} (${ln.sbLetter||'?'}×${qty})</td>${cells}<td class="tcol">${qty}</td></tr>`;
+        const fixedLbl=`${dot}⚓ ${esc(ln.label||'Fijo')} (${ln.sbLetter||'?'}×${qty})`;
+        return`<tr style="opacity:.75"><td class="left">${fixedLbl}</td>${cells}<td class="tcol">${qty}</td><td class="left mic-sticky-r" style="color:var(--text3)">${fixedLbl}</td></tr>`;
       }).join('');
       const totCajGrand=totCaj+(S.sbConfig?.fixedLines||[]).reduce((s,l)=>s+(l.quantity||1),0);
-      const totalRow=`<tr style="font-weight:700;border-top:2px solid var(--border2)"><td class="left" style="color:var(--accent)">TOTAL</td>${perDay.map(()=>'<td></td>').join('')}<td class="tcol" style="color:var(--accent)">${totCajGrand}</td></tr>`;
-      sbEl.innerHTML=`<thead><tr><th class="left">Manguera</th>${dayCols}${totalCol}</tr></thead><tbody>${fixedRows}${sbR}${totalRow}</tbody>`;
+      const totalRow=`<tr style="font-weight:700;border-top:2px solid var(--border2)"><td class="left" style="color:var(--accent)">TOTAL</td>${perDay.map(()=>'<td></td>').join('')}<td class="tcol" style="color:var(--accent)">${totCajGrand}</td><td class="left mic-sticky-r" style="color:var(--accent)">TOTAL</td></tr>`;
+      sbEl.innerHTML=`<thead><tr><th class="left">Manguera</th>${dayCols}${totalCol}<th class="left mic-sticky-r" style="color:var(--text3)">Manguera</th></tr></thead><tbody>${fixedRows}${sbR}${totalRow}</tbody>`;
     }
     // Hide jump buttons in max mode
     const micJumpEl=document.getElementById('mic-jump-btns');
