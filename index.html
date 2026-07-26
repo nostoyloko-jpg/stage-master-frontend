@@ -1722,6 +1722,7 @@ function migrateA(a){
   if(a.soundcheckInicio===undefined)a.soundcheckInicio='';
   if(a.soundcheckFin===undefined)a.soundcheckFin='';
   if(!a.sbCajetines||typeof a.sbCajetines!=='object')a.sbCajetines={};
+  a.reutilizable=!!a.reutilizable; // material de este artista se recoge y reutiliza para otras bandas del mismo día
   if(!Array.isArray(a.channels))a.channels=[];
   const n=parseInt(a.canales)||48;
   while(a.channels.length<n)a.channels.push(emptyChannel());
@@ -2373,6 +2374,7 @@ function buildArtistPage(a){
           <input type="number" value="${a.canales}" min="1" max="128" style="width:54px;text-align:center;padding:3px 6px" oninput="updACh(${a.id},this.value)">
           <button class="btn btn-sm" onclick="openRiderModal(${a.id})" style="white-space:nowrap;letter-spacing:.5px">✦ Importar rider</button>
           <button class="btn btn-sm" id="sb-mode-btn-${a.id}" onclick="toggleSBVisual(${a.id})" title="Cambiar modo de asignación de manguera" style="white-space:nowrap;letter-spacing:.5px;font-size:10px">${_sbVisualMode.has(a.id)?'⌨ Numérico':'⊞ Visual'}</button>
+          <button class="btn btn-sm" onclick="toggleArtistReutilizable(${a.id})" title="${a.reutilizable?'Material reutilizable: en el recuento del día se toma el MÁXIMO junto a las demás bandas reutilizables, no la suma. Clic para desmarcar':'Marcar el material de este artista como reutilizable entre bandas (se recoge y se vuelve a montar) — en el recuento del día contará el máximo, no la suma'}" style="white-space:nowrap;letter-spacing:.5px;font-size:10px;${a.reutilizable?'background:var(--blue,#4fc3f7);color:#04202b;border-color:var(--blue,#4fc3f7);font-weight:700':''}">♻ ${a.reutilizable?'Reutilizable':'No reutilizable'}</button>
           ${cajetinesControls?`<span style="display:flex;align-items:center;gap:8px;margin-left:6px;padding-left:10px;border-left:1px solid var(--border)">
             <span style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap">Cajetines</span>
             ${cajetinesControls}
@@ -2542,6 +2544,12 @@ function resetArtistColumn(aid, kind){
   });
   updBadges(a);updChSum(a);debouncedSave();debouncedSnapshot();
   rebuildArtistPages();
+}
+
+function toggleArtistReutilizable(aid){
+  const a=S.artists.find(x=>x.id===aid);if(!a)return;
+  a.reutilizable=!a.reutilizable;
+  saveS();snapshot();rebuildArtistPages();renderLoadOut();renderSummary();
 }
 
 function updChPieType(aid,idx,value){
@@ -4025,15 +4033,27 @@ let _summaryActiveTab='all';
 
 // Compute per-artist counts of mics, pies, cajetines (raw names, no normalization)
 function computeSummaryFor(artists){
+  const fixedArt=artists.filter(a=>!a.reutilizable);
+  const reuseArt=artists.filter(a=>a.reutilizable);
+  function countMics(a){
+    const m={};
+    a.channels.forEach(ch=>{
+      if(ch.premontado)return;
+      if(ch.micro) m[ch.micro]=(m[ch.micro]||0)+1;
+    });
+    return m;
+  }
   const micCounts={};
-  artists.forEach(a=>a.channels.forEach(ch=>{
-    if(ch.premontado)return; // ya montado (ej. ambientes fijos) — no se recuenta
-    if(ch.micro) micCounts[ch.micro]=(micCounts[ch.micro]||0)+1;
-  }));
+  fixedArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{micCounts[k]=(micCounts[k]||0)+n;});});
+  const reuseMics={};
+  reuseArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{reuseMics[k]=Math.max(reuseMics[k]||0,n);});});
+  Object.entries(reuseMics).forEach(([k,n])=>{micCounts[k]=(micCounts[k]||0)+n;});
+
   const piesCounts={C:0,A:0,P:0,R:0};
-  artists.forEach(a=>a.channels.forEach(ch=>{
-    PIE_DEFS.forEach(p=>{if(ch.pies?.[p.key])piesCounts[p.key]++;});
-  }));
+  PIE_DEFS.forEach(p=>{
+    const cnt=a=>a.channels.filter(ch=>ch.pies?.[p.key]).length;
+    piesCounts[p.key]=fixedArt.reduce((s,a)=>s+cnt(a),0)+Math.max(0,...reuseArt.map(cnt),0);
+  });
   const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
   const cajetinesByLetter={},linkCablesByLetter={};
   S.subboxes.forEach(sb=>{
@@ -4697,20 +4717,35 @@ function renderSubboxSVG(sb, slots, ownerArtistId){
 // Compute all counts (mics, DIs, pies, mangueras, cajetines) for a given subset of artists.
 // Returns {micCount, diM, diST, piC, piA, piP, piR, sbCount, cajetinesByLetter}.
 function computeLoadStats(artists){
+  // Artists whose gear is struck and re-rigged for the next band share the same stock within a day,
+  // so their needs combine with MAX. Artists whose gear stays up all day need their own units → SUM.
+  const fixedArt=artists.filter(a=>!a.reutilizable);
+  const reuseArt=artists.filter(a=>a.reutilizable);
+
+  // Count one artist's channels into a {key:count} map, skipping "ya montado" channels.
+  function countMics(a){
+    const m={};
+    a.channels.forEach(ch=>{
+      if(ch.premontado)return;
+      if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));if(k&&k!=='XLR')m[k]=(m[k]||0)+1;}
+    });
+    return m;
+  }
   const micCount={};
-  artists.forEach(a=>a.channels.forEach(ch=>{
-    if(ch.premontado)return; // ya montado (ej. ambientes fijos) — no se recuenta en Load Out
-    if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));if(k&&k!=='XLR')micCount[k]=(micCount[k]||0)+1;}
-  }));
-  let diM=0,diST=0;
-  artists.forEach(a=>a.channels.forEach(ch=>{
-    if(ch.di==="M")diM++;else if(ch.di==="ST")diST++;
-  }));
-  let piC=0,piA=0,piP=0,piR=0;
-  artists.forEach(a=>a.channels.forEach(ch=>{
-    if(ch.pies?.C)piC++;if(ch.pies?.A)piA++;
-    if(ch.pies?.P)piP++;if(ch.pies?.R)piR++;
-  }));
+  fixedArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{micCount[k]=(micCount[k]||0)+n;});});
+  const reuseMics={};
+  reuseArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{reuseMics[k]=Math.max(reuseMics[k]||0,n);});});
+  Object.entries(reuseMics).forEach(([k,n])=>{micCount[k]=(micCount[k]||0)+n;});
+
+  function countDi(a,type){return a.channels.filter(ch=>ch.di===type).length;}
+  const diM=fixedArt.reduce((s,a)=>s+countDi(a,"M"),0)+Math.max(0,...reuseArt.map(a=>countDi(a,"M")),0);
+  const diST=fixedArt.reduce((s,a)=>s+countDi(a,"ST"),0)+Math.max(0,...reuseArt.map(a=>countDi(a,"ST")),0);
+
+  function countPie(a,key){return a.channels.filter(ch=>ch.pies?.[key]).length;}
+  const piC=fixedArt.reduce((s,a)=>s+countPie(a,'C'),0)+Math.max(0,...reuseArt.map(a=>countPie(a,'C')),0);
+  const piA=fixedArt.reduce((s,a)=>s+countPie(a,'A'),0)+Math.max(0,...reuseArt.map(a=>countPie(a,'A')),0);
+  const piP=fixedArt.reduce((s,a)=>s+countPie(a,'P'),0)+Math.max(0,...reuseArt.map(a=>countPie(a,'P')),0);
+  const piR=fixedArt.reduce((s,a)=>s+countPie(a,'R'),0)+Math.max(0,...reuseArt.map(a=>countPie(a,'R')),0);
   const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
   const sbCount={},cajetinesByLetter={},linkCablesByLetter={};
   S.subboxes.forEach(sb=>{
@@ -4899,7 +4934,7 @@ function renderLoadOut(){
   }
 
   html+=`<div style="display:flex;align-items:center;gap:12px;font-size:10px;color:var(--text3);padding:10px 16px;border-top:1px solid var(--border)">
-    <span>Spare micros/DI = max(1,N×15%) · pies = max(1,N×25%)${multiDay?' · Total = máximo por elemento entre días':''}</span>
+    <span>Spare micros/DI = max(1,N×15%) · pies = max(1,N×25%)${multiDay?' · Total = máximo por elemento entre días':''}${S.artists.some(a=>a.reutilizable)?' · ♻ artistas reutilizables suman entre sí por máximo, no por suma':''}</span>
     ${_loActiveTab==='total'?`<span style="color:var(--accent)">&#9888; = diferencia entre Load In y Load Out</span>`:''}
     <button class="btn btn-sm" onclick="window._clearLo()" style="margin-left:auto;font-size:10px">Limpiar</button>
   </div>`;
@@ -8461,37 +8496,12 @@ async function runPdfExport(){
       // ── Spare formula ──
       function spare(n){ return Math.max(1, Math.ceil(n*0.15)); }
 
-      // ── 1. Count mics across all artists ──
-      const micCount={};
-      S.artists.forEach(a=>{
-        a.channels.forEach(ch=>{
-          if(ch.premontado)return; // ya montado — no se recuenta en Load Out
-          if(ch.micro){
-            const k=normalizeGearName(cleanForPDF(ch.micro));
-            if(k&&k!=='XLR') micCount[k]=(micCount[k]||0)+1;
-          }
-        });
-      });
-
-      // ── 2. Count DIs ──
-      let diMono=0, diStereo=0;
-      S.artists.forEach(a=>{
-        a.channels.forEach(ch=>{
-          if(ch.di==='M') diMono++;
-          else if(ch.di==='ST') diStereo++;
-        });
-      });
-
-      // ── 3. Count stands/pies ──
-      let pieC=0, pieA=0, pieP=0, pieR=0;
-      S.artists.forEach(a=>{
-        a.channels.forEach(ch=>{
-          if(ch.pies?.C) pieC++;
-          if(ch.pies?.A) pieA++;
-          if(ch.pies?.P) pieP++;
-          if(ch.pies?.R) pieR++;
-        });
-      });
+      // ── 1-3. Mics, DIs and stands — reuse the same counting rules as the on-screen Load Out
+      // (skips "ya montado" channels; combines ♻ reusable artists by MAX instead of SUM).
+      const pdfStats=computeLoadStats(S.artists);
+      const micCount=pdfStats.micCount;
+      const diMono=pdfStats.diM, diStereo=pdfStats.diST;
+      const pieC=pdfStats.piC, pieA=pdfStats.piA, pieP=pdfStats.piP, pieR=pdfStats.piR;
 
       // ── 4. Mangueras — fixed count as 1, variable count per artist ──
       const pdfFixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
