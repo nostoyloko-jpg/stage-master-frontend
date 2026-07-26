@@ -1768,6 +1768,27 @@ function getCajetinesTotal(letter){
   });
   return total;
 }
+// Cada set de cajetines de una manguera se enlaza en cadena con un cable de link por unión
+// (N cajetines → N-1 cables). Se suma por artista, ya que cada uno tiene su propio hardware.
+function getLinkCablesTotal(letter){
+  const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
+  if(fixedLine){
+    const qty=fixedLine.quantity||1;
+    return Math.max(0,qty-1);
+  }
+  let total=0;
+  S.artists.forEach(a=>{
+    const used=a.channels.some(ch=>{
+      const v=(ch.subboxes?.[letter]||'').trim();
+      return v&&!isNaN(parseInt(v));
+    });
+    if(used){
+      const n=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
+      total+=Math.max(0,n-1);
+    }
+  });
+  return total;
+}
 function updSbCajetines(aid,letter,val){
   const a=S.artists.find(x=>x.id===aid);if(!a)return;
   if(!a.sbCajetines||typeof a.sbCajetines!=='object')a.sbCajetines={};
@@ -2232,7 +2253,8 @@ function buildArtistPage(a){
   }).join('');
 
   // pie group header
-  const pieGroupTh=`<th colspan="${PIE_DEFS.length}" class="th-grp-pie pie-col" style="background:rgba(255,179,71,0.08)">PIE</th>`;
+  // pie column header is now a single dropdown column — built inline where used
+  const isPieCheckboxMode=_pieCheckboxMode.has(a.id);
   const pieSubThs=PIE_DEFS.map(p=>`<th class="th-grp-pie pie-col" style="width:24px;background:rgba(255,179,71,0.06)" title="${p.label}">${p.key}</th>`).join('');
 
   // Pre-scan for diLink pairs to set rowspan.
@@ -2283,7 +2305,16 @@ function buildArtistPage(a){
     let mergedCellsHtml = '';
     if(!isPairFollower){
       const rs = isPairMaster ? ' rowspan="2"' : '';
-      const pieCellsHtml=PIE_DEFS.map(p=>`<td class="pie-col" style="width:24px;padding:0 2px"${rs}><div class="pie-item"><input type="checkbox" class="pie-cb" ${ch.pies?.[p.key]?'checked':''} title="${p.label}" onchange="updCh(${a.id},${i},'pie_${p.key}',this.checked)"><span class="pie-lbl">${p.key}</span></div><span class="print-val">${ch.pies?.[p.key]?'✓':''}</span></td>`).join('');
+      const pieValue=PIE_DEFS.find(p=>ch.pies?.[p.key])?.key||'';
+      const pieCellHtml = isPieCheckboxMode
+        ? PIE_DEFS.map(p=>`<td class="pie-col" style="width:24px;padding:0 2px"${rs}><div class="pie-item"><input type="checkbox" class="pie-cb" ${ch.pies?.[p.key]?'checked':''} title="${p.label}" onchange="updCh(${a.id},${i},'pie_${p.key}',this.checked)"><span class="pie-lbl">${p.key}</span></div><span class="print-val">${ch.pies?.[p.key]?'✓':''}</span></td>`).join('')
+        : `<td class="pie-col" style="width:78px;padding:2px 4px"${rs}>
+        <select class="pie-type-sel" style="width:100%;font-size:11px;padding:2px 3px" onchange="updChPieType(${a.id},${i},this.value)">
+          <option value="" ${!pieValue?'selected':''}>—</option>
+          ${PIE_DEFS.map(p=>`<option value="${p.key}" ${pieValue===p.key?'selected':''}>${esc(p.label)}</option>`).join('')}
+        </select>
+        <span class="print-val">${pieValue?esc(PIE_DEFS.find(p=>p.key===pieValue).label):''}</span>
+      </td>`;
       mergedCellsHtml = `
       <td style="position:relative"${rs}>
         <select class="micro-sel micro-inp" style="${isLinkedFromPrev?'opacity:.5':''}" onchange="updCh(${a.id},${i},'micro',this.value)" data-row="${i}" data-col="micro">${mOpts}</select>
@@ -2305,8 +2336,8 @@ function buildArtistPage(a){
         ${isLinkedFromPrev?'<div style="font-size:9px;color:var(--blue);margin-top:2px;text-align:center">&#8593; ST</div>':''}
         <span class="print-val">${esc(ch.di||'—')}</span>
       </td>
-      <td class="phantom-col" style="width:28px;text-align:center"${rs}><input type="checkbox" class="pie-cb phantom-cb" data-aid="${a.id}" data-chidx="${i}" ${ch.phantom?'checked':''} title="48V phantom" onchange="updCh(${a.id},${i},'phantom',this.checked)" style="accent-color:var(--accent)"><span class="print-val">${ch.phantom?'48V':''}</span></td>
-      ${pieCellsHtml}
+      <td class="phantom-col" style="width:28px;text-align:center"${rs}><div class="pie-item"><input type="checkbox" class="pie-cb phantom-cb" data-aid="${a.id}" data-chidx="${i}" ${ch.phantom?'checked':''} title="48V phantom" onchange="updCh(${a.id},${i},'phantom',this.checked)" style="accent-color:var(--accent)"><span class="pie-lbl">48V</span></div><span class="print-val">${ch.phantom?'48V':''}</span></td>
+      ${pieCellHtml}
       <td class="tleft"${rs}><textarea class="obs-inp" placeholder="${t('observaciones')}..." oninput="updCh(${a.id},${i},'obs',this.value);autoGrow(this)" data-row="${i}" data-col="obs">${esc(ch.obs||'')}</textarea><span class="print-val">${esc(ch.obs||'')}</span></td>`;
     }
 
@@ -2367,10 +2398,10 @@ function buildArtistPage(a){
               <th rowspan="2" style="min-width:95px">${t('micro').toUpperCase()}</th>
               <th rowspan="2" class="di-col" style="width:54px">${t('di').toUpperCase()}</th>
               <th rowspan="2" class="phantom-col" style="width:28px" title="${t('phantom48v')}">${t('phantom48v')}</th>
-              ${pieGroupTh}
+              <th ${isPieCheckboxMode?'':'rowspan="2"'} class="pie-col" style="${isPieCheckboxMode?'':'width:78px;'}background:rgba(255,179,71,0.08);cursor:pointer" ${isPieCheckboxMode?`colspan="${PIE_DEFS.length}"`:''} onclick="togglePieMode(${a.id})" title="${isPieCheckboxMode?'Clic para cambiar a lista desplegable':'Clic para cambiar a checkboxes'}">PIE <span style="opacity:.5;font-size:9px">⇄</span></th>
               <th rowspan="2" class="tleft" style="min-width:110px">${t('observaciones').toUpperCase()}</th>
             </tr>
-            <tr class="thead-extended">${sbSubThs}${pieSubThs}</tr>
+            <tr class="thead-extended">${sbSubThs}${isPieCheckboxMode?pieSubThs:''}</tr>
             <tr class="thead-simple">
               <th style="width:24px">#</th>
               <th>${t('subbox').toUpperCase()}</th>
@@ -2492,6 +2523,28 @@ function getDiLinkPartnerIdx(a, idx){
   return null;
 }
 
+// Sets the mic-stand type as a single choice (dropdown) while keeping the underlying
+// ch.pies={C,A,P,R} object model intact — so Load Out/Resumen/PDF export (which all read
+// ch.pies?.[key]) keep working unchanged. Also mirrors to the stereo-pair link partner, if any.
+function updChPieType(aid,idx,value){
+  const a=S.artists.find(a=>a.id===aid);if(!a||!a.channels[idx])return;
+  const ch=a.channels[idx];
+  if(!ch.pies)ch.pies={};
+  PIE_DEFS.forEach(p=>{ch.pies[p.key]=false;});
+  if(value) ch.pies[value]=true;
+
+  const partnerIdx=getDiLinkPartnerIdx(a,idx);
+  if(partnerIdx!=null){
+    const partner=a.channels[partnerIdx];
+    if(partner){
+      if(!partner.pies)partner.pies={};
+      PIE_DEFS.forEach(p=>{partner.pies[p.key]=false;});
+      if(value) partner.pies[value]=true;
+    }
+  }
+  updBadges(a);updChSum(a);debouncedSave();debouncedSnapshot();
+}
+
 function updCh(aid,idx,field,value){
   const a=S.artists.find(a=>a.id===aid);if(!a||!a.channels[idx])return;
   const ch=a.channels[idx];
@@ -2602,6 +2655,13 @@ let _sbPicker = null; // {artistId, chIdx, sbLetter, sbColor}
 
 // ── Subbox cell mode: 'numeric' (default) or 'visual' (picker) ──────
 const _sbVisualMode = new Set(); // set of artistIds in visual mode
+
+const _pieCheckboxMode = new Set(); // set of artistIds showing PIE as 4 checkboxes instead of a dropdown
+function togglePieMode(aid){
+  if(_pieCheckboxMode.has(aid)) _pieCheckboxMode.delete(aid);
+  else _pieCheckboxMode.add(aid);
+  rebuildArtistPages();
+}
 // ── Slot→Channel picker (used from Resumen Subbox) ───────────────────
 // Click a slot in the subbox summary → choose which channel to assign
 let _slotPicker = null; // {sbLetter, slot, sbColor}
@@ -3957,17 +4017,22 @@ function computeSummaryFor(artists){
     PIE_DEFS.forEach(p=>{if(ch.pies?.[p.key])piesCounts[p.key]++;});
   }));
   const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
-  const cajetinesByLetter={};
+  const cajetinesByLetter={},linkCablesByLetter={};
   S.subboxes.forEach(sb=>{
     if(fixedLetters.has(sb.letter))return;
-    let sum=0;
+    let sum=0,cables=0;
     artists.forEach(a=>{
       const usesLetter=a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim());
-      if(usesLetter) sum+=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
+      if(usesLetter){
+        const n=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
+        sum+=n;
+        cables+=Math.max(0,n-1);
+      }
     });
     if(sum) cajetinesByLetter[sb.letter]=sum;
+    if(cables) linkCablesByLetter[sb.letter]=cables;
   });
-  return {micCounts,piesCounts,cajetinesByLetter};
+  return {micCounts,piesCounts,cajetinesByLetter,linkCablesByLetter};
 }
 
 function renderSummary(){
@@ -4004,18 +4069,23 @@ function renderSummary(){
     PIE_DEFS.forEach(p=>{piesMax[p.key]=Math.max(...perDay.map(d=>d.stats.piesCounts[p.key]||0));});
     const allLetters=new Set();perDay.forEach(d=>Object.keys(d.stats.cajetinesByLetter).forEach(l=>allLetters.add(l)));
     allLetters.forEach(l=>{cajetinesMax[l]=Math.max(...perDay.map(d=>d.stats.cajetinesByLetter[l]||0));});
+    const cablesMax={};
+    const allCableLetters=new Set();perDay.forEach(d=>Object.keys(d.stats.linkCablesByLetter||{}).forEach(l=>allCableLetters.add(l)));
+    allCableLetters.forEach(l=>{cablesMax[l]=Math.max(...perDay.map(d=>d.stats.linkCablesByLetter?.[l]||0));});
 
     // Stats cards — total max
     const totC=Math.max(...perDay.map(d=>d.artists.reduce((s,a)=>s+a.canales,0)));
     const totM=Object.values(micMax).reduce((s,n)=>s+n,0);
     const totP=Object.values(piesMax).reduce((s,n)=>s+n,0);
     const totCaj=Object.values(cajetinesMax).reduce((s,n)=>s+n,0);
+    const totCables=Object.values(cablesMax).reduce((s,n)=>s+n,0);
     const dayHint=`<div class="stat-card" style="opacity:.7"><div class="stat-label">DÍAS</div><div class="stat-value">${days.length}</div></div>`;
     document.getElementById('summary-stats').innerHTML=
       `<div class="stat-card"><div class="stat-label">Canales (máx./día)</div><div class="stat-value">${totC}</div></div>`+
       `<div class="stat-card"><div class="stat-label">Micros (Σ máx.)</div><div class="stat-value">${totM}</div></div>`+
       `<div class="stat-card"><div class="stat-label">Pies (Σ máx.)</div><div class="stat-value">${totP}</div></div>`+
       `<div class="stat-card"><div class="stat-label">Cajetines (Σ máx.)</div><div class="stat-value">${totCaj}</div></div>`+
+      `<div class="stat-card"><div class="stat-label">Cables link (Σ máx.)</div><div class="stat-value">${totCables}</div></div>`+
       dayHint;
 
     // Column header: one per day + Máximo
@@ -4048,7 +4118,12 @@ function renderSummary(){
         if(!cajetinesMax[sb.letter])return'';
         const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
         const cells=perDay.map(d=>{const n=d.stats.cajetinesByLetter[sb.letter]||0;return `<td class="${n?'':'zero'}" style="text-align:center">${n||'—'}</td>`;}).join('');
-        return`<tr><td class="left">${dot}Manguera ${sb.letter}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${cajetinesMax[sb.letter]}</td></tr>`;
+        let out=`<tr><td class="left">${dot}Manguera ${sb.letter}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${cajetinesMax[sb.letter]}</td></tr>`;
+        if(cablesMax[sb.letter]){
+          const cableCells=perDay.map(d=>{const n=d.stats.linkCablesByLetter?.[sb.letter]||0;return `<td class="${n?'':'zero'}" style="text-align:center;color:var(--text3);font-size:11px">${n||'—'}</td>`;}).join('');
+          out+=`<tr style="opacity:.8"><td class="left" style="padding-left:22px;font-size:11px;color:var(--text3)">↳ Cables link</td>${cableCells}<td class="tcol" style="font-size:11px;color:var(--text3)">${cablesMax[sb.letter]}</td></tr>`;
+        }
+        return out;
       }).filter(Boolean).join('');
       const fixedRows=(S.sbConfig?.fixedLines||[]).map(ln=>{
         const sb=S.subboxes.find(s=>s.letter===ln.sbLetter);
@@ -4138,7 +4213,18 @@ function renderSummary(){
       const total=counts.reduce((s,n)=>s+n,0);
       if(!total)return'';
       const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
-      return`<tr><td class="left">${dot}Manguera ${sb.letter}</td>${counts.map(n=>`<td class="${n?'':'zero'}">${n||'—'}</td>`).join('')}<td class="tcol">${total}</td></tr>`;
+      let out=`<tr><td class="left">${dot}Manguera ${sb.letter}</td>${counts.map(n=>`<td class="${n?'':'zero'}">${n||'—'}</td>`).join('')}<td class="tcol">${total}</td></tr>`;
+      const cableCounts=artists.map(a=>{
+        const usesLetter=a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim());
+        if(!usesLetter)return 0;
+        const n=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
+        return Math.max(0,n-1);
+      });
+      const cableTotal=cableCounts.reduce((s,n)=>s+n,0);
+      if(cableTotal>0){
+        out+=`<tr style="opacity:.8"><td class="left" style="padding-left:22px;font-size:11px;color:var(--text3)">↳ Cables link</td>${cableCounts.map(n=>`<td style="font-size:11px;color:var(--text3)">${n||'—'}</td>`).join('')}<td class="tcol" style="font-size:11px;color:var(--text3)">${cableTotal}</td></tr>`;
+      }
+      return out;
     }).filter(Boolean).join('');
     const fixedRows=(S.sbConfig?.fixedLines||[]).map(ln=>{
       const sb=S.subboxes.find(s=>s.letter===ln.sbLetter);
@@ -4608,7 +4694,7 @@ function computeLoadStats(artists){
     if(ch.pies?.P)piP++;if(ch.pies?.R)piR++;
   }));
   const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
-  const sbCount={},cajetinesByLetter={};
+  const sbCount={},cajetinesByLetter={},linkCablesByLetter={};
   S.subboxes.forEach(sb=>{
     const letter=sb.letter;
     const usesLetter=a=>a.channels.some(ch=>{const v=(ch.subboxes?.[letter]||'').trim();return v&&!isNaN(parseInt(v));});
@@ -4616,17 +4702,27 @@ function computeLoadStats(artists){
       if(artists.some(usesLetter)){
         sbCount[letter]=1;
         const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
-        cajetinesByLetter[letter]=fixedLine?(fixedLine.quantity||1):1;
+        const qty=fixedLine?(fixedLine.quantity||1):1;
+        cajetinesByLetter[letter]=qty;
+        // A fixed line's cajetines are daisy-chained together with one link cable per join.
+        if(qty>1) linkCablesByLetter[letter]=qty-1;
       }
     } else {
       const artistsUsing=artists.filter(usesLetter);
       if(artistsUsing.length){
         sbCount[letter]=artistsUsing.length;
         cajetinesByLetter[letter]=artistsUsing.reduce((s,a)=>s+Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1)),0);
+        // Each artist's own set of cajetines for this manguera needs (cajetines-1) link cables
+        // to daisy-chain them together — summed across artists, since each artist's cajetines are independent hardware.
+        const cables=artistsUsing.reduce((s,a)=>{
+          const n=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
+          return s+Math.max(0,n-1);
+        },0);
+        if(cables>0) linkCablesByLetter[letter]=cables;
       }
     }
   });
-  return {micCount,diM,diST,piC,piA,piP,piR,sbCount,cajetinesByLetter,fixedLetters};
+  return {micCount,diM,diST,piC,piA,piP,piR,sbCount,cajetinesByLetter,linkCablesByLetter,fixedLetters};
 }
 
 // Build the flat rows array from a stats object.
@@ -4644,10 +4740,14 @@ function buildLoadRows(stats){
     });
   Object.entries(stats.sbCount).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([letter,n])=>{
     const label=stats.fixedLetters.has(letter)?`Manguera ${letter} (fija)`:`Manguera ${letter}`;
-    rows.push({cat:"SUBBOX",item:label,need:n,spare:"—",total:n});
+    rows.push({cat:"SUBBOX",item:label,need:n,spare:"—",total:n,key:`SUBBOX_M_${letter}`});
     const cajetines=stats.cajetinesByLetter[letter]||0;
     if(cajetines>n){
-      rows.push({cat:"SUBBOX",item:`↳ Cajetines — Manguera ${letter} ×${cajetines}`,need:cajetines,spare:"—",total:cajetines});
+      rows.push({cat:"SUBBOX",item:`↳ Cajetines — Manguera ${letter} ×${cajetines}`,need:cajetines,spare:"—",total:cajetines,key:`SUBBOX_CAJ_${letter}`});
+    }
+    const cables=stats.linkCablesByLetter[letter]||0;
+    if(cables>0){
+      rows.push({cat:"SUBBOX",item:`↳ Cables link — Manguera ${letter} ×${cables}`,need:cables,spare:"—",total:cables,key:`SUBBOX_CAB_${letter}`});
     }
   });
   return rows;
@@ -4690,11 +4790,12 @@ function renderLoadOut(){
   const perDay=days.map(d=>({...d,stats:computeLoadStats(d.artists),rows:buildLoadRows(computeLoadStats(d.artists))}));
 
   // Compute "Total (máximo)" — for each element across all rows in all days, take the max
-  // Key by "cat|item" so the same element (e.g. "MICRO|SM58") from different days is merged with MAX.
+  // Key by row.key when present (subbox rows, whose item text embeds a count that varies by day),
+  // otherwise by "cat|item" (e.g. "MICRO|SM58", whose item text is stable across days).
   const maxMap={}; // key -> row (with max need/spare/total)
   perDay.forEach(d=>{
     d.rows.forEach(r=>{
-      const key=r.cat+'|'+r.item;
+      const key=r.key||(r.cat+'|'+r.item);
       const cur=maxMap[key];
       if(!cur||r.total>cur.total){
         maxMap[key]={...r};
@@ -8423,13 +8524,18 @@ async function runPdfExport(){
         rows.push(['PIE', label, n, sp, n+sp, '', '']);
       });
 
-      // Mangueras — one row per manguera, plus a cajetines row when it spans multiple stage positions
+      // Mangueras — one row per manguera, plus a cajetines row when it spans multiple stage positions,
+      // and a link-cables row for the cables needed to daisy-chain those cajetines together.
       Object.entries(pdfSbCount).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([letter,n])=>{
         const label=pdfFixedLetters.has(letter)?`Manguera ${letter} (fija)`:`Manguera ${letter}`;
         rows.push(['SUBBOX', label, n, '—', n, '', '']);
         const cajetines=getCajetinesTotal(letter);
         if(cajetines>n){
           rows.push(['SUBBOX', `↳ Cajetines — Manguera ${letter} ×${cajetines}`, cajetines, '—', cajetines, '', '']);
+        }
+        const cables=getLinkCablesTotal(letter);
+        if(cables>0){
+          rows.push(['SUBBOX', `↳ Cables link — Manguera ${letter} ×${cables}`, cables, '—', cables, '', '']);
         }
       });
 
