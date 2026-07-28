@@ -4268,10 +4268,22 @@ function isLineInput(microName){
   const n=microName.toLowerCase();
   return n==='xlr'||n.startsWith('xlr ')||n.includes('línea')||n.includes('linea')||n==='line';
 }
+// Número de CAJAS de DI estéreo de un artista: los canales ST consecutivos forman un par
+// L/R que comparte una sola caja física. Un ST impar suelto cuenta 1 por sí mismo.
+function countStereoDiBoxes(a){
+  let boxes=0,pending=-1;
+  a.channels.forEach((ch,i)=>{
+    if(ch.di!=='ST')return;
+    if(pending>=0&&i===pending+1){pending=-1;return;}
+    boxes++;pending=i;
+  });
+  return boxes;
+}
+
 function updBadges(a){
   const m=a.channels.filter(c=>c.micro&&!isLineInput(c.micro)).length;
   const dM=a.channels.filter(c=>c.di==='M').length;
-  const dST=a.channels.filter(c=>c.di==='ST').length;
+  const dST=countStereoDiBoxes(a);
   const d=dM+dST;
   const p=a.channels.reduce((s,c)=>s+PIE_DEFS.filter(pd=>c.pies?.[pd.key]).length,0);
   const pr=a.channels.filter(c=>c.obs?.toUpperCase().includes('PROPIO')).length;
@@ -4284,7 +4296,7 @@ function updChSum(a){
   const el=document.getElementById(`chsum-${a.id}`);if(!el)return;
   const m=a.channels.filter(c=>c.micro&&!isLineInput(c.micro)).length;
   const dM=a.channels.filter(c=>c.di==='M').length;
-  const dST=a.channels.filter(c=>c.di==='ST').length;
+  const dST=countStereoDiBoxes(a);
   const d=dM+dST;
   const pc=PIE_DEFS.reduce((acc,p)=>{acc[p.key]=a.channels.filter(c=>c.pies?.[p.key]).length;return acc;},{});
   const pr=a.channels.filter(c=>c.obs?.toUpperCase().includes('PROPIO')).length;
@@ -4589,12 +4601,8 @@ function renderSummary(){
 
   const tC=artists.reduce((s,a)=>s+a.canales,0);
   const tM=artists.reduce((s,a)=>s+a.channels.filter(c=>c.micro&&!isLineInput(c.micro)&&!c.premontado&&!isMicroPropio(c.micro)).length,0);
-  // Una DI estéreo enlazada L/R es una sola caja física — no se cuenta dos veces.
-  const tD=artists.reduce((s,a)=>s+a.channels.filter((c,i)=>{
-    if(!c.di)return false;
-    if(c.di==='ST' && c.diLink==='prev' && a.channels[i-1]?.diLink==='next' && a.channels[i-1]?.di==='ST') return false;
-    return true;
-  }).length,0);
+  // Una DI estéreo L/R es una sola caja física — se emparejan los ST consecutivos.
+  const tD=artists.reduce((s,a)=>s+a.channels.filter(c=>c.di==='M').length+countStereoDiBoxes(a),0);
   const tP=artists.reduce((s,a)=>s+a.channels.reduce((ss,c)=>ss+PIE_DEFS.filter(p=>c.pies?.[p.key]).length,0),0);
   document.getElementById('summary-stats').innerHTML=[[t('totalCanales'),tC],[t('totalMicros'),tM],[t('totalDIs'),tD],[t('totalPies'),tP],[t('artistas'),artists.length]]
     .map(([l,v])=>`<div class="stat-card"><div class="stat-label">${l}</div><div class="stat-value">${v}</div></div>`).join('');
@@ -5250,17 +5258,9 @@ function computeLoadStats(artists){
   reuseArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{reuseMics[k]=Math.max(reuseMics[k]||0,n);});});
   Object.entries(reuseMics).forEach(([k,n])=>{micCount[k]=(micCount[k]||0)+n;});
 
-  // Una DI estéreo es UNA caja física que atiende los dos canales del par L/R. Si los dos
-  // canales están enlazados entre sí, se cuenta una sola vez (se ignora el canal "seguidor"
-  // del par). Un canal ST suelto, sin pareja enlazada, cuenta 1 por sí mismo.
   function countDi(a,type){
-    if(type!=="ST") return a.channels.filter(ch=>ch.di===type).length;
-    return a.channels.filter((ch,i)=>{
-      if(ch.di!=="ST")return false;
-      // Skip the bottom half of a mutual L/R link — its box is the one already counted above.
-      if(ch.diLink==='prev' && a.channels[i-1]?.diLink==='next' && a.channels[i-1]?.di==='ST') return false;
-      return true;
-    }).length;
+    if(type==='ST') return countStereoDiBoxes(a);
+    return a.channels.filter(ch=>ch.di===type).length;
   }
   const diM=fixedArt.reduce((s,a)=>s+countDi(a,"M"),0)+Math.max(0,...reuseArt.map(a=>countDi(a,"M")),0);
   const diST=fixedArt.reduce((s,a)=>s+countDi(a,"ST"),0)+Math.max(0,...reuseArt.map(a=>countDi(a,"ST")),0);
@@ -9013,7 +9013,7 @@ async function runPdfExport(){
           ['Canales',    ...S.artists.map(a=>a.channels.length),                                                   S.artists.reduce((s,a)=>s+a.channels.length,0)],
           ['Con micro',  ...S.artists.map(a=>a.channels.filter(ch=>ch.micro).length),                             S.artists.reduce((s,a)=>s+a.channels.filter(ch=>ch.micro).length,0)],
           ['DI Mono',    ...S.artists.map(a=>a.channels.filter(ch=>ch.di==='M').length),                          S.artists.reduce((s,a)=>s+a.channels.filter(ch=>ch.di==='M').length,0)],
-          ['DI Stereo',  ...S.artists.map(a=>a.channels.filter(ch=>ch.di==='ST').length),                         S.artists.reduce((s,a)=>s+a.channels.filter(ch=>ch.di==='ST').length,0)],
+          ['DI Stereo',  ...S.artists.map(a=>countStereoDiBoxes(a)),                                             S.artists.reduce((s,a)=>s+countStereoDiBoxes(a),0)],
           ['48V',        ...S.artists.map(a=>a.channels.filter(ch=>ch.phantom).length),                           S.artists.reduce((s,a)=>s+a.channels.filter(ch=>ch.phantom).length,0)],
           ['Propios',    ...S.artists.map(a=>a.channels.filter(ch=>(ch.obs||'').toLowerCase().includes('propio')).length), S.artists.reduce((s,a)=>s+a.channels.filter(ch=>(ch.obs||'').toLowerCase().includes('propio')).length,0)],
         ];
@@ -9546,7 +9546,7 @@ async function runPdfExport(){
         pdf.setFont('helvetica','normal'); pdf.setFontSize(6.5); pdf.setTextColor(...GRAY3);
         const mics=a.channels.filter(ch=>ch.micro).length;
         const diM=a.channels.filter(ch=>ch.di==='M').length;
-        const diST=a.channels.filter(ch=>ch.di==='ST').length;
+        const diST=countStereoDiBoxes(a);
         const ph2=a.channels.filter(ch=>ch.phantom).length;
         const piC=a.channels.filter(ch=>ch.pies?.C).length;
         const piA=a.channels.filter(ch=>ch.pies?.A).length;
