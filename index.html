@@ -4263,11 +4263,38 @@ function openMapWindow(){
 // it appears in the CH list but must be excluded from all material counts.
 function isMicroPropio(nombre){ return nombre==='__PROPIO__'; }
 
+// "XLR" no es material que haya que llevar: es una salida por cable que ya está en el carro,
+// así que se excluye de todos los recuentos igual que los micros propios.
+function isXLROnly(nombre){
+  if(!nombre)return false;
+  return String(nombre).trim().toUpperCase()==='XLR';
+}
+
 function isLineInput(microName){
   if(!microName)return false;
   const n=microName.toLowerCase();
   return n==='xlr'||n.startsWith('xlr ')||n.includes('línea')||n.includes('linea')||n==='line';
 }
+// Índices de canales que son la MITAD INFERIOR de un par estéreo consecutivo con el mismo
+// modelo asignado: comparten una sola caja física (p.ej. una DI estéreo Radial Pro D2 cubre
+// L y R), así que ese canal no debe volver a contar el equipo.
+function stereoSharedGearIdx(a){
+  const skip=new Set();
+  let pending=-1;
+  a.channels.forEach((ch,i)=>{
+    if(ch.di!=='ST'){pending=-1;return;}
+    if(pending>=0 && i===pending+1){
+      // Solo se comparte la caja si ambos canales llevan el mismo modelo (o el segundo va vacío).
+      const prev=a.channels[pending];
+      if(!ch.micro || ch.micro===prev.micro) skip.add(i);
+      pending=-1;
+      return;
+    }
+    pending=i;
+  });
+  return skip;
+}
+
 // Número de CAJAS de DI estéreo de un artista: los canales ST consecutivos forman un par
 // L/R que comparte una sola caja física. Un ST impar suelto cuenta 1 por sí mismo.
 function countStereoDiBoxes(a){
@@ -4375,9 +4402,11 @@ function computeSummaryFor(artists){
   const reuseArt=artists.filter(a=>a.reutilizable);
   function countMics(a){
     const m={};
-    a.channels.forEach(ch=>{
+    const shared=stereoSharedGearIdx(a);
+    a.channels.forEach((ch,i)=>{
       if(ch.premontado)return;
-      if(ch.micro&&!isMicroPropio(ch.micro)) m[ch.micro]=(m[ch.micro]||0)+1;
+      if(shared.has(i))return; // par estéreo: una sola caja para L+R
+      if(ch.micro&&!isMicroPropio(ch.micro)&&!isXLROnly(ch.micro)) m[ch.micro]=(m[ch.micro]||0)+1;
     });
     return m;
   }
@@ -4600,7 +4629,10 @@ function renderSummary(){
   if(titleEl) titleEl.textContent='Cajetines utilizados';
 
   const tC=artists.reduce((s,a)=>s+a.canales,0);
-  const tM=artists.reduce((s,a)=>s+a.channels.filter(c=>c.micro&&!isLineInput(c.micro)&&!c.premontado&&!isMicroPropio(c.micro)).length,0);
+  const tM=artists.reduce((s,a)=>{
+    const shared=stereoSharedGearIdx(a);
+    return s+a.channels.filter((c,i)=>c.micro&&!isLineInput(c.micro)&&!c.premontado&&!isMicroPropio(c.micro)&&!isXLROnly(c.micro)&&!shared.has(i)).length;
+  },0);
   // Una DI estéreo L/R es una sola caja física — se emparejan los ST consecutivos.
   const tD=artists.reduce((s,a)=>s+a.channels.filter(c=>c.di==='M').length+countStereoDiBoxes(a),0);
   const tP=artists.reduce((s,a)=>s+a.channels.reduce((ss,c)=>ss+PIE_DEFS.filter(p=>c.pies?.[p.key]).length,0),0);
@@ -4609,7 +4641,11 @@ function renderSummary(){
   const aH=artists.map((a,i)=>`<th class="mic-art-h" style="min-width:120px;background:${hex2rgba(ARTIST_COLORS[i%ARTIST_COLORS.length],0.3)};color:${ARTIST_COLORS[i%ARTIST_COLORS.length]}">${esc(a.nombre.slice(0,10))}</th>`).join('');
   const mR=S.micros.map(mic=>{
     const nm=typeof mic==='string'?mic:mic.nombre;
-    const cc=artists.map(a=>a.channels.filter(ch=>ch.micro===nm&&!ch.premontado).length); // propio mics filtered at source in countMics
+    const cc=artists.map(a=>{
+      const shared=stereoSharedGearIdx(a);
+      if(isXLROnly(nm))return 0;
+      return a.channels.filter((ch,i)=>ch.micro===nm&&!ch.premontado&&!shared.has(i)).length;
+    });
     const isThisMicLocked=(typeof mic==='object'&&mic.locked)||S.micLocked;
     const mTotal=isThisMicLocked?Math.max(0,...cc):cc.reduce((s,n)=>s+n,0);
     const isLocked=(typeof mic==='object'&&mic.locked)||false;
@@ -5246,8 +5282,10 @@ function computeLoadStats(artists){
   // Count one artist's channels into a {key:count} map, skipping "ya montado" channels.
   function countMics(a){
     const m={};
-    a.channels.forEach(ch=>{
+    const shared=stereoSharedGearIdx(a);
+    a.channels.forEach((ch,i)=>{
       if(ch.premontado)return;
+      if(shared.has(i))return; // par estéreo: una sola caja para L+R
       if(ch.micro&&!isMicroPropio(ch.micro)){const k=normalizeGearName(cleanForPDF(ch.micro));if(k&&k!=='XLR')m[k]=(m[k]||0)+1;}
     });
     return m;
