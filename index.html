@@ -766,7 +766,7 @@ self.addEventListener('fetch',e=>e.respondWith(
     <div class="nav-label">General</div>
     <div class="nav-item active" onclick="nav('config')"  id="nav-config"><span class="dot"></span>Configuración</div>
     <div class="nav-item"        onclick="nav('orden')"   id="nav-orden"><span class="dot"></span>Orden del día</div>
-    <div class="nav-item"        onclick="nav('summary')" id="nav-summary"><span class="dot"></span>Resumen microfonía</div>
+    <div class="nav-item"        onclick="nav('summary')" id="nav-summary"><span class="dot"></span>Resumen material</div>
     <div class="nav-item"        onclick="nav('rchlist')" id="nav-rchlist"><span class="dot"></span>Resumen CH List</div>
     <div class="nav-item"        onclick="nav('sblist')"  id="nav-sblist"><span class="dot"></span>Resumen Cajetines</div>
     <div class="nav-item"        onclick="nav('loadout')" id="nav-loadout"><span class="dot"></span>Load Out</div>
@@ -1231,6 +1231,7 @@ self.addEventListener('fetch',e=>e.respondWith(
     <div id="summary-stats" class="summary-grid"></div>
     <div class="card"><div class="card-header"><span class="card-title">Microfonía por artista</span></div><div id="mic-jump-btns" style="display:flex;gap:4px;flex-wrap:wrap;padding:6px 12px 4px;border-bottom:1px solid var(--border)"></div><div id="mic-summary-wrap" style="overflow-x:auto;overflow-y:visible;scroll-behavior:smooth;border-radius:0 0 var(--radius) var(--radius)"><table class="mic-table" id="mic-summary-table"></table></div></div>
     <div class="card"><div class="card-header"><span class="card-title">Pies de micrófono</span></div><div style="overflow-x:auto"><table class="mic-table" id="pies-summary-table"></table></div></div>
+    <div class="card"><div class="card-header"><span class="card-title" id="mangueras-summary-title">Mangueras utilizadas</span></div><div style="overflow-x:auto"><table class="mic-table" id="mangueras-summary-table"></table></div></div>
     <div class="card"><div class="card-header"><span class="card-title" id="subbox-summary-title">Cajetines utilizados</span></div><div style="overflow-x:auto"><table class="mic-table" id="subbox-summary-table"></table></div></div>
   </div>
 
@@ -1463,7 +1464,7 @@ const SM_STORE = {
 const LANGS={
   es:{
     // Nav
-    config:'Configuración',orden:'Orden del día',summary:'Resumen microfonía',
+    config:'Configuración',orden:'Orden del día',summary:'Resumen material',
     rchlist:'Resumen CH List',sblist:'Resumen Cajetines',
     // File menu
     archivo:'Archivo',
@@ -1549,7 +1550,7 @@ const LANGS={
     exportarInventario:'↓ Exportar inventario',importarInventario:'↑ Importar inventario',
   },
   en:{
-    config:'Settings',orden:'Schedule',summary:'Mic Summary',
+    config:'Settings',orden:'Schedule',summary:'Material Summary',
     rchlist:'CH List Summary',sblist:'Subbox Summary',
     archivo:'File',
     nuevo:'New CH List',abrir:'Open...',guardar:'Save',guardarComo:'Save as...',
@@ -1942,7 +1943,7 @@ function nav(page,aid){
     document.getElementById('nav-plan-'+aid)?.classList.add('active');
     renderStagePlan(aid);
   }
-  const titles={config:'Configuración',orden:'Orden del día',summary:'Resumen microfonía',rchlist:'Resumen CH List'};
+  const titles={config:'Configuración',orden:'Orden del día',summary:'Resumen material',rchlist:'Resumen CH List'};
   const artist=S.artists.find(a=>a.id===aid);
   document.getElementById('topbar-title').textContent=page==='artist'?(artist?.nombre||'—'):(titles[page]||page);
   const modeToggle=`<div class="mode-toggle" title="Cambiar modo de visualización"><button class="mode-toggle-btn${viewMode==='simple'?' active':''}" id="mode-std-btn" onclick="setMode('simple')">Simple</button><button class="mode-toggle-btn${viewMode==='extended'?' active':''}" id="mode-exp-btn" onclick="setMode('extended')">Extendido</button></div>`;
@@ -4308,7 +4309,7 @@ function renderOrden(){
 }
 
 // ── SUMMARY ──
-// Global tab state for Resumen microfonía
+// Global tab state for Resumen material
 let _summaryActiveTab='all';
 
 // Compute per-artist counts of mics, pies, cajetines (raw names, no normalization)
@@ -4335,24 +4336,64 @@ function computeSummaryFor(artists){
     piesCounts[p.key]=fixedArt.reduce((s,a)=>s+cnt(a),0)+Math.max(0,...reuseArt.map(cnt),0);
   });
   const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
-  const cajetinesByLetter={},linkCablesByLetter={};
+  const configuredSetIds=new Set((S.mangueraSets||[]).map(s=>s.id));
+  // Per-letter results:
+  // - mangueraCountByLetter: how many mangueras total (1 per unique set for fixed, 1 per artist for variable)
+  // - cajetinesByLetter: cajetines total (sum non-reusable + max reusable)
+  // - linkCablesByLetter: link cables total (same rule as cajetines)
+  const mangueraCountByLetter={},cajetinesByLetter={},linkCablesByLetter={};
   S.subboxes.forEach(sb=>{
-    if(fixedLetters.has(sb.letter))return;
-    const usesLetter=a=>a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim());
-    const nonReuse=artists.filter(a=>!a.reutilizable&&usesLetter(a));
-    const reuse=artists.filter(a=>a.reutilizable&&usesLetter(a));
-    const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
-    const cajSum=nonReuse.reduce((s,a)=>s+cajFor(a),0);
-    const cajMax=Math.max(0,...reuse.map(cajFor));
-    const total=cajSum+cajMax;
-    if(total) cajetinesByLetter[sb.letter]=total;
-    const cabFor=a=>Math.max(0,cajFor(a)-1);
-    const cabSum=nonReuse.reduce((s,a)=>s+cabFor(a),0);
-    const cabMax=Math.max(0,...reuse.map(cabFor));
-    const cablesTotal=cabSum+cabMax;
-    if(cablesTotal) linkCablesByLetter[sb.letter]=cablesTotal;
+    const letter=sb.letter;
+    const usesLetter=a=>a.channels.some(ch=>(ch.subboxes?.[letter]||'').trim());
+    if(fixedLetters.has(letter)){
+      // Fija: 1 manguera por sistema único que la use.
+      const usedSets=new Set();
+      const artistsUsing=[];
+      artists.forEach(a=>{
+        if(!usesLetter(a))return;
+        artistsUsing.push(a);
+        const setId=a.mangueraSet||'propio';
+        if(setId==='propio' || !configuredSetIds.has(setId)) usedSets.add('propio-'+a.id);
+        else usedSets.add('set-'+setId);
+      });
+      if(usedSets.size>0){
+        mangueraCountByLetter[letter]=usedSets.size;
+        const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
+        const qty=fixedLine?(fixedLine.quantity||1):1;
+        let cajSum=0,cajMax=0;
+        artistsUsing.forEach(a=>{
+          if(a.reutilizable) cajMax=Math.max(cajMax,qty);
+          else cajSum+=qty;
+        });
+        cajetinesByLetter[letter]=cajSum+cajMax;
+        if(qty>1){
+          let cabSum=0,cabMax=0;
+          artistsUsing.forEach(a=>{
+            if(a.reutilizable) cabMax=Math.max(cabMax,qty-1);
+            else cabSum+=qty-1;
+          });
+          if(cabSum+cabMax>0) linkCablesByLetter[letter]=cabSum+cabMax;
+        }
+      }
+    } else {
+      // Variable: 1 manguera por artista que la use. Cajetines/cables por reutilizable/no-reut.
+      const artistsUsing=artists.filter(usesLetter);
+      if(artistsUsing.length){
+        mangueraCountByLetter[letter]=artistsUsing.length;
+        const nonReuse=artistsUsing.filter(a=>!a.reutilizable);
+        const reuse=artistsUsing.filter(a=>a.reutilizable);
+        const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
+        const cajSum=nonReuse.reduce((s,a)=>s+cajFor(a),0);
+        const cajMax=Math.max(0,...reuse.map(cajFor));
+        cajetinesByLetter[letter]=cajSum+cajMax;
+        const cabFor=a=>Math.max(0,cajFor(a)-1);
+        const cabSum=nonReuse.reduce((s,a)=>s+cabFor(a),0);
+        const cabMax=Math.max(0,...reuse.map(cabFor));
+        if(cabSum+cabMax>0) linkCablesByLetter[letter]=cabSum+cabMax;
+      }
+    }
   });
-  return {micCounts,piesCounts,cajetinesByLetter,linkCablesByLetter};
+  return {micCounts,piesCounts,mangueraCountByLetter,cajetinesByLetter,linkCablesByLetter};
 }
 
 function renderSummary(){
@@ -4435,28 +4476,51 @@ function renderSummary(){
     if(titleEl) titleEl.textContent='Cajetines utilizados (máximo por día)';
     if(sbEl){
       const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
-      const sbR=S.subboxes.filter(sb=>!fixedLetters.has(sb.letter)).map(sb=>{
+      // Aggregate max mangueras + cables per day for the total column.
+      const mangueraMax={},cablesMaxByLetter={};
+      const allMangLetters=new Set();
+      perDay.forEach(d=>Object.keys(d.stats.mangueraCountByLetter||{}).forEach(l=>allMangLetters.add(l)));
+      allMangLetters.forEach(l=>{mangueraMax[l]=Math.max(...perDay.map(d=>d.stats.mangueraCountByLetter?.[l]||0));});
+      const allCableLettersM=new Set();
+      perDay.forEach(d=>Object.keys(d.stats.linkCablesByLetter||{}).forEach(l=>allCableLettersM.add(l)));
+      allCableLettersM.forEach(l=>{cablesMaxByLetter[l]=Math.max(...perDay.map(d=>d.stats.linkCablesByLetter?.[l]||0));});
+
+      // ── MANGUERAS table (mangueras + link cables) ──
+      const mangEl=document.getElementById('mangueras-summary-table');
+      const mangTitleEl=document.getElementById('mangueras-summary-title');
+      if(mangTitleEl) mangTitleEl.textContent='Mangueras utilizadas (máximo por día)';
+      if(mangEl){
+        const sortedLetters=[...allMangLetters].sort();
+        const mangRows=sortedLetters.map(letter=>{
+          const sb=S.subboxes.find(s=>s.letter===letter);
+          if(!sb)return'';
+          const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
+          const isFixed=fixedLetters.has(letter);
+          const cells=perDay.map(d=>{const n=d.stats.mangueraCountByLetter?.[letter]||0;return `<td class="${n?'':'zero'}" style="text-align:center">${n||'—'}</td>`;}).join('');
+          let out=`<tr><td class="left">${dot}Manguera ${letter}${isFixed?' <span style="font-size:9px;color:var(--text3)">(fija)</span>':''}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${mangueraMax[letter]}</td><td class="left mic-sticky-r" style="color:var(--text3)">${dot}Manguera ${letter}</td></tr>`;
+          if(cablesMaxByLetter[letter]){
+            const cableCells=perDay.map(d=>{const n=d.stats.linkCablesByLetter?.[letter]||0;return `<td class="${n?'':'zero'}" style="text-align:center;color:var(--text3);font-size:11px">${n||'—'}</td>`;}).join('');
+            out+=`<tr style="opacity:.8"><td class="left" style="padding-left:22px;font-size:11px;color:var(--text3)">↳ Cables link</td>${cableCells}<td class="tcol" style="font-size:11px;color:var(--text3)">${cablesMaxByLetter[letter]}</td><td class="left mic-sticky-r" style="padding-left:22px;font-size:11px;color:var(--text3)">↳ Cables link ${letter}</td></tr>`;
+          }
+          return out;
+        }).filter(Boolean).join('');
+        const totMang=Object.values(mangueraMax).reduce((s,n)=>s+n,0);
+        const totCab=Object.values(cablesMaxByLetter).reduce((s,n)=>s+n,0);
+        const totalRow=`<tr style="font-weight:700;border-top:2px solid var(--border2)"><td class="left" style="color:var(--accent)">TOTAL mangueras + cables</td>${perDay.map(()=>'<td></td>').join('')}<td class="tcol" style="color:var(--accent)">${totMang+totCab}</td><td class="left mic-sticky-r" style="color:var(--accent)">TOTAL</td></tr>`;
+        mangEl.innerHTML=`<thead><tr><th class="left">Manguera</th>${dayCols}${totalCol}<th class="left mic-sticky-r" style="color:var(--text3)">Manguera</th></tr></thead><tbody>${mangRows||'<tr><td colspan="'+(perDay.length+3)+'" class="empty-state">Sin datos</td></tr>'}${mangRows?totalRow:''}</tbody>`;
+      }
+
+      // ── CAJETINES table (physical breakout boxes) ──
+      const sbR=S.subboxes.map(sb=>{
         if(!cajetinesMax[sb.letter])return'';
         const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
+        const isFixed=fixedLetters.has(sb.letter);
         const cells=perDay.map(d=>{const n=d.stats.cajetinesByLetter[sb.letter]||0;return `<td class="${n?'':'zero'}" style="text-align:center">${n||'—'}</td>`;}).join('');
-        let out=`<tr><td class="left">${dot}Manguera ${sb.letter}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${cajetinesMax[sb.letter]}</td><td class="left mic-sticky-r" style="color:var(--text3)">${dot}Manguera ${sb.letter}</td></tr>`;
-        if(cablesMax[sb.letter]){
-          const cableCells=perDay.map(d=>{const n=d.stats.linkCablesByLetter?.[sb.letter]||0;return `<td class="${n?'':'zero'}" style="text-align:center;color:var(--text3);font-size:11px">${n||'—'}</td>`;}).join('');
-          out+=`<tr style="opacity:.8"><td class="left" style="padding-left:22px;font-size:11px;color:var(--text3)">↳ Cables link</td>${cableCells}<td class="tcol" style="font-size:11px;color:var(--text3)">${cablesMax[sb.letter]}</td><td class="left mic-sticky-r" style="padding-left:22px;font-size:11px;color:var(--text3)">↳ Cables link ${sb.letter}</td></tr>`;
-        }
-        return out;
+        return`<tr><td class="left">${dot}Cajetines Manguera ${sb.letter}${isFixed?' <span style="font-size:9px;color:var(--text3)">(fija)</span>':''}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${cajetinesMax[sb.letter]}</td><td class="left mic-sticky-r" style="color:var(--text3)">${dot}Cajetines ${sb.letter}</td></tr>`;
       }).filter(Boolean).join('');
-      const fixedRows=(S.sbConfig?.fixedLines||[]).map(ln=>{
-        const sb=S.subboxes.find(s=>s.letter===ln.sbLetter);
-        const dot=sb?`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`:'';
-        const qty=ln.quantity||1;
-        const cells=perDay.map(()=>`<td style="color:var(--text3);font-style:italic;font-size:11px;text-align:center">—</td>`).join('');
-        const fixedLbl=`${dot}⚓ ${esc(ln.label||'Fijo')} (${ln.sbLetter||'?'}×${qty})`;
-        return`<tr style="opacity:.75"><td class="left">${fixedLbl}</td>${cells}<td class="tcol">${qty}</td><td class="left mic-sticky-r" style="color:var(--text3)">${fixedLbl}</td></tr>`;
-      }).join('');
-      const totCajGrand=totCaj+(S.sbConfig?.fixedLines||[]).reduce((s,l)=>s+(l.quantity||1),0);
+      const totCajGrand=totCaj;
       const totalRow=`<tr style="font-weight:700;border-top:2px solid var(--border2)"><td class="left" style="color:var(--accent)">TOTAL</td>${perDay.map(()=>'<td></td>').join('')}<td class="tcol" style="color:var(--accent)">${totCajGrand}</td><td class="left mic-sticky-r" style="color:var(--accent)">TOTAL</td></tr>`;
-      sbEl.innerHTML=`<thead><tr><th class="left">Manguera</th>${dayCols}${totalCol}<th class="left mic-sticky-r" style="color:var(--text3)">Manguera</th></tr></thead><tbody>${fixedRows}${sbR}${totalRow}</tbody>`;
+      sbEl.innerHTML=`<thead><tr><th class="left">Cajetines</th>${dayCols}${totalCol}<th class="left mic-sticky-r" style="color:var(--text3)">Cajetines</th></tr></thead><tbody>${sbR||'<tr><td colspan="'+(perDay.length+3)+'" class="empty-state">Sin datos</td></tr>'}${sbR?totalRow:''}</tbody>`;
     }
     // Hide jump buttons in max mode
     const micJumpEl=document.getElementById('mic-jump-btns');
@@ -4521,50 +4585,91 @@ function renderSummary(){
   }).join('');
   document.getElementById('pies-summary-table').innerHTML=`<thead><tr><th class="left">${t('pieLbl')}</th>${aH}<th>Total</th></tr></thead><tbody>${pR}</tbody>`;
 
-  // ── Cajetines table (was "Mangueras utilizadas") ──
-  // Now counts CAJETINES per artist (from a.sbCajetines[letter]), not just 1-per-artist.
+  // ── Mangueras + Cajetines tables (normal / per-day mode) ──
   const sbEl=document.getElementById('subbox-summary-table');
+  const mangEl=document.getElementById('mangueras-summary-table');
   if(sbEl&&S.subboxes.length){
     const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
-    const sbR=S.subboxes.filter(sb=>!fixedLetters.has(sb.letter)).map(sb=>{
-      const counts=artists.map(a=>{
-        const usesLetter=a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim());
-        if(!usesLetter)return 0;
-        return Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
-      });
-      const total=counts.reduce((s,n)=>s+n,0);
+    const configuredSetIds=new Set((S.mangueraSets||[]).map(s=>s.id));
+
+    // ── MANGUERAS TABLE (mangueras + cables link) ──
+    if(mangEl){
+      const mangTitleEl=document.getElementById('mangueras-summary-title');
+      if(mangTitleEl) mangTitleEl.textContent='Mangueras utilizadas';
+      const mangRows=S.subboxes.map(sb=>{
+        const letter=sb.letter;
+        const usesLetter=a=>a.channels.some(ch=>(ch.subboxes?.[letter]||'').trim());
+        const isFixed=fixedLetters.has(letter);
+        let counts,total,cableCounts,cableTotal;
+        if(isFixed){
+          // Fija: la celda del artista marca "1" si aporta un sistema nuevo aún no contado.
+          const usedSets=new Set();
+          counts=artists.map(a=>{
+            if(!usesLetter(a))return '';
+            const setId=a.mangueraSet||'propio';
+            const key=(setId==='propio'||!configuredSetIds.has(setId))?('propio-'+a.id):('set-'+setId);
+            if(usedSets.has(key))return '·'; // mismo sistema ya contado a la izquierda
+            usedSets.add(key);return 1;
+          });
+          total=[...usedSets].length;
+          const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
+          const qty=fixedLine?(fixedLine.quantity||1):1;
+          cableTotal=total*Math.max(0,qty-1);
+          cableCounts=null;
+        } else {
+          counts=artists.map(a=>usesLetter(a)?1:0);
+          total=counts.reduce((s,n)=>s+(typeof n==='number'?n:0),0);
+          cableCounts=artists.map(a=>{
+            if(!usesLetter(a))return 0;
+            const n=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
+            return Math.max(0,n-1);
+          });
+          cableTotal=cableCounts.reduce((s,n)=>s+n,0);
+        }
+        if(!total && !cableTotal)return'';
+        const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
+        const fixLbl=isFixed?' <span style="font-size:9px;color:var(--text3)">(fija)</span>':'';
+        let out=`<tr><td class="left">${dot}Manguera ${letter}${fixLbl}</td>${counts.map(n=>`<td class="${n?'':'zero'}" style="text-align:center">${n||'—'}</td>`).join('')}<td class="tcol">${total}</td></tr>`;
+        if(cableTotal>0){
+          const cableCellsHtml=(cableCounts||artists.map(()=>'')).map(n=>`<td style="font-size:11px;color:var(--text3);text-align:center">${n||'—'}</td>`).join('');
+          out+=`<tr style="opacity:.8"><td class="left" style="padding-left:22px;font-size:11px;color:var(--text3)">↳ Cables link</td>${cableCellsHtml}<td class="tcol" style="font-size:11px;color:var(--text3)">${cableTotal}</td></tr>`;
+        }
+        return out;
+      }).filter(Boolean).join('');
+      mangEl.innerHTML=`<thead><tr><th class="left">Manguera</th>${aH}<th>Total</th></tr></thead><tbody>${mangRows||'<tr><td colspan="'+(artists.length+2)+'" class="empty-state">Sin datos</td></tr>'}</tbody>`;
+    }
+
+    // ── CAJETINES TABLE (physical breakout boxes only) ──
+    const titleEl=document.getElementById('subbox-summary-title');
+    if(titleEl) titleEl.textContent='Cajetines utilizados';
+    const sbR=S.subboxes.map(sb=>{
+      const letter=sb.letter;
+      const usesLetter=a=>a.channels.some(ch=>(ch.subboxes?.[letter]||'').trim());
+      const isFixed=fixedLetters.has(letter);
+      let counts,total;
+      if(isFixed){
+        const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
+        const qty=fixedLine?(fixedLine.quantity||1):1;
+        let cajSum=0,cajMax=0;
+        counts=artists.map(a=>{
+          if(!usesLetter(a))return 0;
+          if(a.reutilizable){cajMax=Math.max(cajMax,qty);return qty;}
+          cajSum+=qty;return qty;
+        });
+        total=cajSum+cajMax;
+      } else {
+        const nonReuse=artists.filter(a=>!a.reutilizable&&usesLetter(a));
+        const reuse=artists.filter(a=>a.reutilizable&&usesLetter(a));
+        const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
+        counts=artists.map(a=>usesLetter(a)?cajFor(a):0);
+        total=nonReuse.reduce((s,a)=>s+cajFor(a),0)+Math.max(0,...reuse.map(cajFor));
+      }
       if(!total)return'';
       const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
-      let out=`<tr><td class="left">${dot}Manguera ${sb.letter}</td>${counts.map(n=>`<td class="${n?'':'zero'}">${n||'—'}</td>`).join('')}<td class="tcol">${total}</td></tr>`;
-      const cableCounts=artists.map(a=>{
-        const usesLetter=a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim());
-        if(!usesLetter)return 0;
-        const n=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
-        return Math.max(0,n-1);
-      });
-      const cableTotal=cableCounts.reduce((s,n)=>s+n,0);
-      if(cableTotal>0){
-        out+=`<tr style="opacity:.8"><td class="left" style="padding-left:22px;font-size:11px;color:var(--text3)">↳ Cables link</td>${cableCounts.map(n=>`<td style="font-size:11px;color:var(--text3)">${n||'—'}</td>`).join('')}<td class="tcol" style="font-size:11px;color:var(--text3)">${cableTotal}</td></tr>`;
-      }
-      return out;
+      const fixLbl=isFixed?' <span style="font-size:9px;color:var(--text3)">(fija)</span>':'';
+      return`<tr><td class="left">${dot}Cajetines Manguera ${letter}${fixLbl}</td>${counts.map(n=>`<td class="${n?'':'zero'}" style="text-align:center">${n||'—'}</td>`).join('')}<td class="tcol">${total}</td></tr>`;
     }).filter(Boolean).join('');
-    const fixedRows=(S.sbConfig?.fixedLines||[]).map(ln=>{
-      const sb=S.subboxes.find(s=>s.letter===ln.sbLetter);
-      const dot=sb?`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`:'';
-      const qty=ln.quantity||1;
-      const fixedCells=artists.map(()=>`<td style="color:var(--text3);font-style:italic;font-size:11px">—</td>`).join('');
-      return`<tr style="opacity:.75"><td class="left">${dot}⚓ ${esc(ln.label||'Fijo')} (${ln.sbLetter||'?'}×${qty})</td>${fixedCells}<td class="tcol">${qty}</td></tr>`;
-    }).join('');
-    const dynamicTotal=S.subboxes.filter(sb=>!fixedLetters.has(sb.letter)).reduce((s,sb)=>{
-      return s+artists.reduce((ss,a)=>{
-        const usesLetter=a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim());
-        return ss+(usesLetter?Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1)):0);
-      },0);
-    },0);
-    const fixedQtyTotal=(S.sbConfig?.fixedLines||[]).reduce((s,l)=>s+(l.quantity||1),0);
-    const grandTotal=dynamicTotal+fixedQtyTotal;
-    const totalRow=`<tr style="font-weight:700;border-top:2px solid var(--border2)"><td class="left" style="color:var(--accent)">TOTAL</td>${artists.map(()=>'<td></td>').join('')}<td class="tcol" style="color:var(--accent)">${grandTotal}</td></tr>`;
-    sbEl.innerHTML=`<thead><tr><th class="left">Manguera</th>${aH}<th>Cajetines</th></tr></thead><tbody>${fixedRows}${sbR||''}${totalRow}</tbody>`;
+    sbEl.innerHTML=`<thead><tr><th class="left">Cajetines</th>${aH}<th>Total</th></tr></thead><tbody>${sbR||'<tr><td colspan="'+(artists.length+2)+'" class="empty-state">Sin datos</td></tr>'}</tbody>`;
   }
 }
 
@@ -8435,7 +8540,7 @@ function getPdfSections(){
   // Returns array of {id, label, sub, pageId, checked}
   const sections=[
     {id:'orden',    label:'Orden del día',        sub:'Lineup y timeline',       pageId:'page-orden',   checked:true},
-    {id:'summary',  label:'Resumen microfonía',   sub:'Totales y desglose',      pageId:'page-summary', checked:true},
+    {id:'summary',  label:'Resumen material',   sub:'Totales y desglose',      pageId:'page-summary', checked:true},
     {id:'loadout',  label:'Load Out',             sub:'Material + spares',       pageId:'',             checked:true},
     {id:'rchlist',  label:'Resumen CH List',      sub:'Todos los artistas',      pageId:'page-rchlist', checked:true},
     {id:'sblist',   label:'Resumen Cajetines',       sub:'Diagrama visual',         pageId:'page-sblist',  checked:true},
@@ -8824,7 +8929,7 @@ async function runPdfExport(){
         });
       }
 
-      addFooter(pdf,'Resumen Microfonía');
+      addFooter(pdf,'Resumen Material');
     }
 
     // ── LOAD OUT ──
