@@ -4457,14 +4457,16 @@ function renderSummary(){
     const totC=Math.max(...perDay.map(d=>d.artists.reduce((s,a)=>s+a.canales,0)));
     const totM=Object.values(micMax).reduce((s,n)=>s+n,0);
     const totP=Object.values(piesMax).reduce((s,n)=>s+n,0);
-    const totCaj=Object.values(cajetinesMax).reduce((s,n)=>s+n,0);
+    // El material a llevar es el mayor total diario, no la suma de máximos por manguera
+    // (esos máximos pueden darse en días distintos).
+    const totCaj=Math.max(0,...perDay.map(d=>Object.values(d.stats.cajetinesByLetter||{}).reduce((s,n)=>s+n,0)));
     const totCables=Object.values(cablesMax).reduce((s,n)=>s+n,0);
     const dayHint=`<div class="stat-card" style="opacity:.7"><div class="stat-label">DÍAS</div><div class="stat-value">${days.length}</div></div>`;
     document.getElementById('summary-stats').innerHTML=
       `<div class="stat-card"><div class="stat-label">Canales (máx./día)</div><div class="stat-value">${totC}</div></div>`+
       `<div class="stat-card"><div class="stat-label">Micros (Σ máx.)</div><div class="stat-value">${totM}</div></div>`+
       `<div class="stat-card"><div class="stat-label">Pies (Σ máx.)</div><div class="stat-value">${totP}</div></div>`+
-      `<div class="stat-card"><div class="stat-label">Cajetines (Σ máx.)</div><div class="stat-value">${totCaj}</div></div>`+
+      `<div class="stat-card"><div class="stat-label">Cajetines (máx./día)</div><div class="stat-value">${totCaj}</div></div>`+
       `<div class="stat-card"><div class="stat-label">Cables link (Σ máx.)</div><div class="stat-value">${totCables}</div></div>`+
       dayHint;
 
@@ -4549,8 +4551,12 @@ function renderSummary(){
         const cells=perDay.map(d=>{const n=d.stats.cajetinesByLetter[sb.letter]||0;return `<td class="${n?'':'zero'}" style="text-align:center">${n||'—'}</td>`;}).join('');
         return`<tr><td class="left">${dot}Cajetines Manguera ${sb.letter}${isFixed?' <span style="font-size:9px;color:var(--text3)">(fija)</span>':''}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${cajetinesMax[sb.letter]}</td><td class="left mic-sticky-r" style="color:var(--text3)">${dot}Cajetines ${sb.letter}</td></tr>`;
       }).filter(Boolean).join('');
-      const totCajGrand=totCaj;
-      const totalRow=`<tr style="font-weight:700;border-top:2px solid var(--border2)"><td class="left" style="color:var(--accent)">TOTAL</td>${perDay.map(()=>'<td></td>').join('')}<td class="tcol" style="color:var(--accent)">${totCajGrand}</td><td class="left mic-sticky-r" style="color:var(--accent)">TOTAL</td></tr>`;
+      // Total del día = todos los cajetines de ese día (sistemas + fijas + regla reutilizable).
+      // El "máximo" que hay que llevar al festival es el mayor de esos totales diarios.
+      const dayCajTotals=perDay.map(d=>Object.values(d.stats.cajetinesByLetter||{}).reduce((s,n)=>s+n,0));
+      const maxDayCaj=Math.max(0,...dayCajTotals);
+      const dayTotalCells=dayCajTotals.map(n=>`<td style="text-align:center;color:var(--accent);font-weight:800">${n||'—'}</td>`).join('');
+      const totalRow=`<tr style="font-weight:700;border-top:2px solid var(--border2)"><td class="left" style="color:var(--accent)">TOTAL cajetines / día</td>${dayTotalCells}<td class="tcol" style="color:var(--accent);font-size:14px">${maxDayCaj}</td><td class="left mic-sticky-r" style="color:var(--accent)">TOTAL / día</td></tr>`;
       sbEl.innerHTML=`<thead><tr><th class="left">Cajetines</th>${dayCols}${totalCol}<th class="left mic-sticky-r" style="color:var(--text3)">Cajetines</th></tr></thead><tbody>${sbR||'<tr><td colspan="'+(perDay.length+3)+'" class="empty-state">Sin datos</td></tr>'}${sbR?totalRow:''}</tbody>`;
     }
     // Hide jump buttons in max mode
@@ -4723,6 +4729,8 @@ function renderSummary(){
     // ── CAJETINES TABLE (physical breakout boxes only) ──
     const titleEl=document.getElementById('subbox-summary-title');
     if(titleEl) titleEl.textContent='Cajetines utilizados';
+    let cajGrand=0;                       // total de cajetines del día (todas las mangueras)
+    const cajColTotals=artists.map(()=>0); // total por artista
     const sbR=S.subboxes.map(sb=>{
       const letter=sb.letter;
       const usesLetter=a=>a.channels.some(ch=>(ch.subboxes?.[letter]||'').trim());
@@ -4746,11 +4754,20 @@ function renderSummary(){
         total=nonReuse.reduce((s,a)=>s+cajFor(a),0)+Math.max(0,...reuse.map(cajFor));
       }
       if(!total)return'';
+      cajGrand+=total;
+      counts.forEach((n,i)=>{cajColTotals[i]+=n;});
       const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
       const fixLbl=isFixed?' <span style="font-size:9px;color:var(--text3)">(fija)</span>':'';
       return`<tr><td class="left">${dot}Cajetines Manguera ${letter}${fixLbl}</td>${counts.map(n=>`<td class="${n?'':'zero'}" style="text-align:center">${n||'—'}</td>`).join('')}<td class="tcol">${total}</td></tr>`;
     }).filter(Boolean).join('');
-    sbEl.innerHTML=`<thead><tr><th class="left">Cajetines</th>${aH}<th>Total</th></tr></thead><tbody>${sbR||'<tr><td colspan="'+(artists.length+2)+'" class="empty-state">Sin datos</td></tr>'}</tbody>`;
+    // Grand total = todos los cajetines que hacen falta ese día, sumando sistemas, fijas
+    // y aplicando ya la regla de reutilizables dentro de cada manguera.
+    const cajTotalRow=sbR?`<tr style="font-weight:700;border-top:2px solid var(--border2)">
+      <td class="left" style="color:var(--accent)">TOTAL cajetines</td>
+      ${cajColTotals.map(n=>`<td style="text-align:center;color:var(--accent)">${n||'—'}</td>`).join('')}
+      <td class="tcol" style="color:var(--accent);font-size:14px">${cajGrand}</td>
+    </tr>`:'';
+    sbEl.innerHTML=`<thead><tr><th class="left">Cajetines</th>${aH}<th>Total</th></tr></thead><tbody>${sbR||'<tr><td colspan="'+(artists.length+2)+'" class="empty-state">Sin datos</td></tr>'}${cajTotalRow}</tbody>`;
   }
 }
 
