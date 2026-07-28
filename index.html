@@ -1012,6 +1012,14 @@ self.addEventListener('fetch',e=>e.respondWith(
           <div id="sb-fixed-lines-list"></div>
           <button class="btn btn-sm" style="margin-top:8px" onclick="addFixedLine()">+ Añadir línea fija</button>
         </div>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+            <div class="field-label" style="margin-bottom:0">Sets de mangueras (sistemas compartidos)</div>
+            <input type="number" id="cfg-nsets" min="0" max="8" value="0" style="width:60px;text-align:center" oninput="updMangueraSetsCount(this.value)">
+            <span style="font-size:11px;color:var(--text3);flex:1">Cada set comparte 1 sola instancia de cada manguera fija — los artistas del mismo set usan el mismo sistema. Los artistas con "Propio" cuentan como set independiente.</span>
+          </div>
+          <div id="mset-config-list"></div>
+        </div>
       </div>
     </div>
 
@@ -1722,6 +1730,8 @@ function migrateA(a){
   if(a.soundcheckInicio===undefined)a.soundcheckInicio='';
   if(a.soundcheckFin===undefined)a.soundcheckFin='';
   if(!a.sbCajetines||typeof a.sbCajetines!=='object')a.sbCajetines={};
+  if(!a.sbCajetinesNames||typeof a.sbCajetinesNames!=='object')a.sbCajetinesNames={};
+  if(typeof a.mangueraSet!=='string')a.mangueraSet='propio'; // 'propio' o id de un set compartido
   a.reutilizable=!!a.reutilizable; // material de este artista se recoge y reutiliza para otras bandas del mismo día
   if(!Array.isArray(a.channels))a.channels=[];
   const n=parseInt(a.canales)||48;
@@ -1758,43 +1768,79 @@ function emptyChannel(){return{subboxes:{},instrumento:'',canalStage:'',micro:''
 // necesita para su propia manguera, según su disposición de escenario) ──
 function getCajetinesTotal(letter){
   const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
-  if(fixedLine) return fixedLine.quantity||1;
-  let total=0;
-  S.artists.forEach(a=>{
-    const used=a.channels.some(ch=>{
-      const v=(ch.subboxes?.[letter]||'').trim();
-      return v&&!isNaN(parseInt(v));
-    });
-    if(used) total+=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
+  const usesLetter=a=>a.channels.some(ch=>{
+    const v=(ch.subboxes?.[letter]||'').trim();
+    return v&&!isNaN(parseInt(v));
   });
-  return total;
+  if(fixedLine){
+    // Cajetines de manguera fija: por artista según reutilizable/no reutilizable (no por set).
+    const qty=fixedLine.quantity||1;
+    let cajSum=0,cajMax=0;
+    S.artists.forEach(a=>{
+      if(!usesLetter(a))return;
+      if(a.reutilizable) cajMax=Math.max(cajMax,qty);
+      else cajSum+=qty;
+    });
+    return cajSum+cajMax;
+  }
+  const fixedArt=S.artists.filter(a=>!a.reutilizable&&usesLetter(a));
+  const reuseArt=S.artists.filter(a=>a.reutilizable&&usesLetter(a));
+  const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
+  return fixedArt.reduce((s,a)=>s+cajFor(a),0)+Math.max(0,...reuseArt.map(cajFor));
 }
 // Cada set de cajetines de una manguera se enlaza en cadena con un cable de link por unión
-// (N cajetines → N-1 cables). Se suma por artista, ya que cada uno tiene su propio hardware.
+// (N cajetines → N-1 cables). No-reutilizables suman por artista; reutilizables toman el máx.
 function getLinkCablesTotal(letter){
   const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
+  const usesLetter=a=>a.channels.some(ch=>{
+    const v=(ch.subboxes?.[letter]||'').trim();
+    return v&&!isNaN(parseInt(v));
+  });
   if(fixedLine){
     const qty=fixedLine.quantity||1;
-    return Math.max(0,qty-1);
-  }
-  let total=0;
-  S.artists.forEach(a=>{
-    const used=a.channels.some(ch=>{
-      const v=(ch.subboxes?.[letter]||'').trim();
-      return v&&!isNaN(parseInt(v));
+    if(qty<2)return 0;
+    let cabSum=0,cabMax=0;
+    S.artists.forEach(a=>{
+      if(!usesLetter(a))return;
+      if(a.reutilizable) cabMax=Math.max(cabMax,qty-1);
+      else cabSum+=qty-1;
     });
-    if(used){
-      const n=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
-      total+=Math.max(0,n-1);
-    }
-  });
-  return total;
+    return cabSum+cabMax;
+  }
+  const fixedArt=S.artists.filter(a=>!a.reutilizable&&usesLetter(a));
+  const reuseArt=S.artists.filter(a=>a.reutilizable&&usesLetter(a));
+  const cabFor=a=>{
+    const n=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
+    return Math.max(0,n-1);
+  };
+  return fixedArt.reduce((s,a)=>s+cabFor(a),0)+Math.max(0,...reuseArt.map(cabFor));
 }
 function updSbCajetines(aid,letter,val){
   const a=S.artists.find(x=>x.id===aid);if(!a)return;
   if(!a.sbCajetines||typeof a.sbCajetines!=='object')a.sbCajetines={};
-  a.sbCajetines[letter]=Math.max(1,Math.min(8,parseInt(val)||1));
-  saveS();renderLoadOut();
+  const n=Math.max(1,Math.min(8,parseInt(val)||1));
+  a.sbCajetines[letter]=n;
+  // Keep the names array the same length as the cajetines count — trim or extend as needed.
+  if(!a.sbCajetinesNames||typeof a.sbCajetinesNames!=='object')a.sbCajetinesNames={};
+  const cur=Array.isArray(a.sbCajetinesNames[letter])?a.sbCajetinesNames[letter]:[];
+  while(cur.length<n)cur.push('');
+  cur.length=n;
+  a.sbCajetinesNames[letter]=cur;
+  saveS();rebuildArtistPages();renderLoadOut();renderSbList&&renderSbList();
+}
+// Live-mirror the name into every visible copy of this input so typing stays in sync between
+// the CH list toolbar and Resumen Cajetines without stealing focus via a re-render.
+function updSbCajetinName(aid,letter,idx,name){
+  const a=S.artists.find(x=>x.id===aid);if(!a)return;
+  if(!a.sbCajetinesNames||typeof a.sbCajetinesNames!=='object')a.sbCajetinesNames={};
+  const cur=Array.isArray(a.sbCajetinesNames[letter])?a.sbCajetinesNames[letter]:[];
+  while(cur.length<=idx)cur.push('');
+  cur[idx]=name;
+  a.sbCajetinesNames[letter]=cur;
+  document.querySelectorAll(`[data-cajname="${aid}-${letter}-${idx}"]`).forEach(el=>{
+    if(el.value!==name) el.value=name;
+  });
+  debouncedSave();
 }
 
 // ── THEME ──
@@ -1956,7 +2002,8 @@ function renderConfig(){
   set('cfg-tecnico',S.event.tecnico||'');
   set('cfg-version',S.event.version||'');
   set('cfg-nsb',S.subboxes.length);
-  renderSBConfig();renderLineup();renderMicroList();renderFixedLines();
+  renderSBConfig();renderLineup();renderMicroList();renderFixedLines();renderMangueraSetsConfig();
+  const nsetsInp=document.getElementById('cfg-nsets');if(nsetsInp)nsetsInp.value=(S.mangueraSets||[]).length;
   const sbRows=document.getElementById('cfg-sb-rows');if(sbRows)sbRows.value=S.sbConfig?.rows||2;
   const sbCols=document.getElementById('cfg-sb-cols');if(sbCols)sbCols.value=S.sbConfig?.cols||8;
 }
@@ -2058,6 +2105,47 @@ function renderSBConfig(){
       ${isFixed?'<span style="margin-left:auto;font-size:10px;color:var(--text3);font-style:italic">Cajetines: fijo (ver Líneas fijas)</span>':'<span style="margin-left:auto;font-size:10px;color:var(--text3);font-style:italic">Cajetines: por artista, en su CH list</span>'}
     </div>`}).join('');
 }
+// ── Sets de mangueras ─────────────────────────────────────────────────
+// Un festival usa varios "sistemas" de mangueras que rotan entre artistas: mientras el set A
+// está sonando, se monta el B para la siguiente banda, etc. Las mangueras fijas se comparten
+// dentro de un set, así que solo cuentan 1 vez por set — no por artista.
+function updMangueraSetsCount(val){
+  const n=Math.max(0,Math.min(8,parseInt(val)||0));
+  if(!Array.isArray(S.mangueraSets))S.mangueraSets=[];
+  while(S.mangueraSets.length<n){
+    const id=SB_LETTERS[S.mangueraSets.length];
+    S.mangueraSets.push({id,label:'Sistema '+id});
+  }
+  // When shrinking, artists on removed sets fall back to 'propio'.
+  if(S.mangueraSets.length>n){
+    const removedIds=new Set(S.mangueraSets.slice(n).map(s=>s.id));
+    S.mangueraSets.length=n;
+    S.artists.forEach(a=>{if(removedIds.has(a.mangueraSet))a.mangueraSet='propio';});
+  }
+  renderMangueraSetsConfig();rebuildArtistPages();saveS();renderLoadOut();
+}
+function updMangueraSetLabel(i,label){
+  if(!S.mangueraSets?.[i])return;
+  S.mangueraSets[i].label=label;
+  debouncedSave();
+}
+function renderMangueraSetsConfig(){
+  const list=document.getElementById('mset-config-list');
+  if(!list)return;
+  const sets=S.mangueraSets||[];
+  if(!sets.length){list.innerHTML='<div style="font-size:11px;color:var(--text3);font-style:italic;padding:6px 0">Sin sets configurados — cada artista cuenta como set independiente ("Propio")</div>';return;}
+  list.innerHTML=sets.map((s,i)=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:5px 0">
+      <div style="width:22px;height:22px;border-radius:4px;background:var(--accent);color:#fff;font-weight:800;font-size:11px;display:inline-flex;align-items:center;justify-content:center">${s.id}</div>
+      <input type="text" value="${esc(s.label||'')}" placeholder="Sistema ${s.id}" style="flex:1;max-width:280px;font-size:12px;padding:4px 8px" oninput="updMangueraSetLabel(${i},this.value)">
+    </div>`).join('');
+}
+function updArtistMangueraSet(aid,setId){
+  const a=S.artists.find(x=>x.id===aid);if(!a)return;
+  a.mangueraSet=setId;
+  saveS();snapshot();renderLoadOut();renderSummary();
+}
+
 function updSubboxCount(val){
   const n=Math.max(1,Math.min(8,parseInt(val)||1));
   while(S.subboxes.length<n)S.subboxes.push({letter:SB_LETTERS[S.subboxes.length],color:DEFAULT_SB_COLORS[S.subboxes.length]||'#888',cajetines:1});
@@ -2246,10 +2334,17 @@ function buildArtistPage(a){
   const fixedLettersSet=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
   const usedSbLetters=sbs.filter(sb=>!fixedLettersSet.has(sb.letter)&&a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim()));
   const cajetinesControls=usedSbLetters.map(sb=>{
-    const val=a.sbCajetines?.[sb.letter]||1;
-    return `<span style="display:inline-flex;align-items:center;gap:3px">
+    const val=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
+    const names=Array.isArray(a.sbCajetinesNames?.[sb.letter])?a.sbCajetinesNames[sb.letter]:[];
+    // One input per cajetín — only when more than 1 (a single cajetín needs no name distinction).
+    const nameInputs = val>1 ? Array.from({length:val},(_,i)=>{
+      const nm=esc(names[i]||'');
+      return `<input type="text" value="${nm}" data-cajname="${a.id}-${sb.letter}-${i}" placeholder="${sb.letter}${i+1}" title="Nombre/posición del cajetín ${sb.letter}${i+1} (p.ej. batería, teclas...)" style="width:64px;font-size:10px;padding:2px 4px;border:1px solid ${hex2rgba(sb.color,0.5)};border-radius:3px;background:var(--inp-bg);color:var(--text)" oninput="updSbCajetinName(${a.id},'${sb.letter}',${i},this.value)">`;
+    }).join('') : '';
+    return `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 4px;border-radius:4px;${val>1?'background:'+hex2rgba(sb.color,0.06)+';':''}">
       <span style="width:14px;height:14px;border-radius:3px;background:${hex2rgba(sb.color,0.4)};color:${sb.color};font-size:9px;font-weight:700;display:inline-flex;align-items:center;justify-content:center">${sb.letter}</span>
       <input type="number" min="1" max="8" value="${val}" style="width:34px;text-align:center;font-size:11px;padding:2px 3px" title="Cajetines que este artista necesita para Manguera ${sb.letter}" oninput="updSbCajetines(${a.id},'${sb.letter}',this.value)">
+      ${nameInputs}
     </span>`;
   }).join('');
 
@@ -2291,7 +2386,9 @@ function buildArtistPage(a){
         return `<td class="sb-td-${si} sb-sub-col" style="background:${hex2rgba(sb.color,0.18)}"><input type="text" class="sb-inp" value="${esc(val)}" placeholder="—" oninput="updCh(${a.id},${i},'sb_${sb.letter}',this.value)" data-row="${i}" data-col="sb${si}" data-aid="${a.id}" data-chidx="${i}" tabindex="0"><span class="print-val">${esc(val)}</span></td>`;
       }
     }).join('');
-    const mOpts='<option value="">—</option>'+S.micros.map(m=>{const nm=typeof m==='string'?m:m.nombre;return`<option value="${esc(nm)}"${ch.micro===nm?' selected':''}>${esc(nm)}</option>`;}).join('');
+    const mOpts='<option value="">—</option>'
+      +`<option value="__PROPIO__" ${ch.micro==='__PROPIO__'?'selected':''} style="color:var(--blue,#4fc3f7);font-style:italic">🎤 Propio</option>`
+      +S.micros.map(m=>{const nm=typeof m==='string'?m:m.nombre;return`<option value="${esc(nm)}"${ch.micro===nm?' selected':''}>${esc(nm)}</option>`;}).join('');
     // Build simple-mode subbox summary pills
     const sbPills=sbs.map(sb=>{
       const val=(ch.subboxes?.[sb.letter]||'').trim();
@@ -2308,7 +2405,7 @@ function buildArtistPage(a){
       const rs = isPairMaster ? ' rowspan="2"' : '';
       const pieValue=PIE_DEFS.find(p=>ch.pies?.[p.key])?.key||'';
       const pieCellHtml = isPieCheckboxMode
-        ? PIE_DEFS.map(p=>`<td class="pie-col" style="width:24px;padding:0 2px"${rs}><div class="pie-item"><input type="checkbox" class="pie-cb" ${ch.pies?.[p.key]?'checked':''} title="${p.label}" onchange="updCh(${a.id},${i},'pie_${p.key}',this.checked)"><span class="pie-lbl">${p.key}</span></div><span class="print-val">${ch.pies?.[p.key]?'✓':''}</span></td>`).join('')
+        ? PIE_DEFS.map(p=>`<td class="pie-col" style="width:24px;padding:0 2px"${rs}><div class="pie-item"><input type="checkbox" class="pie-cb" data-cb-aid="${a.id}" data-cb-chidx="${i}" data-cb-pie="${p.key}" ${ch.pies?.[p.key]?'checked':''} title="${p.label}" onchange="updCh(${a.id},${i},'pie_${p.key}',this.checked)"><span class="pie-lbl">${p.key}</span></div><span class="print-val">${ch.pies?.[p.key]?'✓':''}</span></td>`).join('')
         : `<td class="pie-col" style="width:78px;padding:2px 4px"${rs}>
         <select class="pie-type-sel" style="width:100%;font-size:11px;padding:2px 3px" onchange="updChPieType(${a.id},${i},this.value)">
           <option value="" ${!pieValue?'selected':''}>—</option>
@@ -2317,11 +2414,11 @@ function buildArtistPage(a){
         <span class="print-val">${pieValue?esc(PIE_DEFS.find(p=>p.key===pieValue).label):''}</span>
       </td>`;
       mergedCellsHtml = `
-      <td style="position:relative"${rs}>
-        <select class="micro-sel micro-inp" style="${isLinkedFromPrev?'opacity:.5':''}" onchange="updCh(${a.id},${i},'micro',this.value)" data-row="${i}" data-col="micro">${mOpts}</select>
+      <td style="position:relative${ch.micro==='__PROPIO__'?';background:rgba(79,195,247,0.07)':''}"${rs}>
+        <select class="micro-sel micro-inp" style="${isLinkedFromPrev?'opacity:.5':''}${ch.micro==='__PROPIO__'?';color:var(--blue,#4fc3f7);font-style:italic;font-weight:600':''}" onchange="updCh(${a.id},${i},'micro',this.value)" data-row="${i}" data-col="micro">${mOpts}</select>
         ${ch.phantom?`<span title="48V phantom" style="position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:50%;background:var(--amber,#f59e0b);opacity:.9;pointer-events:none"></span>`:''}
         ${isPairMaster?`<div style="font-size:8px;color:var(--blue);margin-top:2px;text-align:center;opacity:.75">↕ par ST (ch${i+1}-${i+2})</div>`:''}
-        <span class="print-val">${esc(ch.micro||'')}</span>
+        <span class="print-val">${ch.micro==='__PROPIO__'?'Propio':esc(ch.micro||'')}</span>
       </td>
       <td class="di-col" style="width:54px;vertical-align:top"${rs}>
         <select class="di-sel" style="width:52px;font-size:11px;padding:2px;text-align:center" onchange="updCh(${a.id},${i},'di',this.value);updDiLink(${a.id},${i})">
@@ -2388,9 +2485,17 @@ function buildArtistPage(a){
           <span class="badge badge-blue"  id="bpr-${a.id}">—</span>
         </div>
       </div>
+      ${(S.mangueraSets||[]).length ? `<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--border);background:linear-gradient(90deg,rgba(79,195,247,0.06),transparent)">
+        <span style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text2);font-weight:700">Set de mangueras</span>
+        <select onchange="updArtistMangueraSet(${a.id},this.value)" style="font-size:13px;font-weight:700;padding:5px 10px;letter-spacing:.5px;background:var(--bg3);border:1px solid var(--border2);border-radius:5px;color:var(--text);min-width:200px;cursor:pointer">
+          ${S.mangueraSets.map(s=>`<option value="${esc(s.id)}" ${a.mangueraSet===s.id?'selected':''}>${esc(s.id)} — ${esc(s.label||('Sistema '+s.id))}</option>`).join('')}
+          <option value="propio" ${a.mangueraSet==='propio'?'selected':''} style="font-style:italic">Propio (set independiente para este artista)</option>
+        </select>
+        <span style="font-size:10px;color:var(--text3);flex:1;font-style:italic">Los artistas del mismo set comparten mangueras fijas: solo cuentan 1 vez para el recuento.</span>
+      </div>` : ''}
       <div style="padding:8px 14px;border-bottom:1px solid var(--border);background:var(--bg2)">
         <div style="font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);margin-bottom:3px">${t('notasLabel').toUpperCase()}</div>
-        <textarea id="artist-notas-${a.id}" style="width:100%;max-width:720px;background:var(--inp-bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--font);font-size:11px;padding:5px 8px;resize:vertical;min-height:34px;line-height:1.5;display:block"
+        <textarea id="artist-notas-${a.id}" data-notas-for="${a.id}" style="width:100%;max-width:none;background:var(--inp-bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--font);font-size:11px;padding:5px 8px;resize:both;min-height:34px;line-height:1.5;display:block;${notasSizeStyle(a.id)}"
           placeholder="${t('notasPh')}"
           oninput="updArtistNotas(${a.id},this.value)">${esc(a.notas||'')}</textarea>
       </div>
@@ -2566,6 +2671,67 @@ function updArtistNotas(aid, value){
   debouncedSave();
 }
 
+// ── Notas textarea size persistence ─────────────────────────────────
+// Keep the user's chosen width/height for each artist's notes textarea across page navigations
+// and page reloads. Stored per artist ID in localStorage as an object of {w,h} in pixels.
+function getNotasSize(aid){
+  try{
+    const raw=localStorage.getItem('sm.notasSize');
+    const map=raw?JSON.parse(raw):{};
+    return map[aid]||null;
+  }catch(e){return null;}
+}
+function saveNotasSize(aid,size){
+  try{
+    const raw=localStorage.getItem('sm.notasSize');
+    const map=raw?JSON.parse(raw):{};
+    map[aid]=size;
+    localStorage.setItem('sm.notasSize',JSON.stringify(map));
+  }catch(e){}
+}
+// Inline style fragment to apply the stored size at render time — avoids a flicker on mount.
+function notasSizeStyle(aid){
+  const s=getNotasSize(aid);
+  if(!s)return '';
+  const parts=[];
+  if(s.w)parts.push(`width:${s.w}px`);
+  if(s.h)parts.push(`min-height:${s.h}px;height:${s.h}px`);
+  return parts.join(';');
+}
+// A single ResizeObserver watches every notes textarea in the document.
+// The first callback per element is the initial layout tick — we skip it via a data flag so we
+// don't overwrite the stored size with the render-time size.
+const _notasResizeObserver = typeof ResizeObserver!=='undefined' ? new ResizeObserver(entries=>{
+  entries.forEach(e=>{
+    const el=e.target;
+    const aid=el.getAttribute('data-notas-for');
+    if(!aid)return;
+    if(el.dataset.notasBaseline==='1'){el.dataset.notasBaseline='0';return;}
+    const w=Math.round(e.contentRect.width);
+    const h=Math.round(e.contentRect.height);
+    saveNotasSize(aid,{w,h});
+  });
+}):null;
+function watchNotasResize(el){
+  if(!el||el.dataset.notasWatched==='1'||!_notasResizeObserver)return;
+  el.dataset.notasWatched='1';
+  el.dataset.notasBaseline='1';
+  _notasResizeObserver.observe(el);
+}
+// Whenever new notes textareas appear anywhere in the DOM (re-renders, new artists),
+// register them with the ResizeObserver.
+if(typeof MutationObserver!=='undefined'){
+  new MutationObserver(mutations=>{
+    mutations.forEach(m=>{
+      m.addedNodes.forEach(n=>{
+        if(n.nodeType!==1)return;
+        if(n.matches?.('textarea[data-notas-for]'))watchNotasResize(n);
+        n.querySelectorAll?.('textarea[data-notas-for]').forEach(watchNotasResize);
+      });
+    });
+  }).observe(document.body,{childList:true,subtree:true});
+}
+
 function toggleArtistReutilizable(aid){
   const a=S.artists.find(x=>x.id===aid);if(!a)return;
   a.reutilizable=!a.reutilizable;
@@ -2615,7 +2781,16 @@ function updCh(aid,idx,field,value){
     }
     ch.subboxes[sbLetter]=value;
   }
-  else if(field.startsWith('pie_')){if(!ch.pies)ch.pies={};ch.pies[field.slice(4)]=value;}
+  else if(field.startsWith('pie_')){
+    if(!ch.pies)ch.pies={};
+    const pieKey=field.slice(4);
+    ch.pies[pieKey]=value;
+    // Exclusive: marking one clears the others (una entrada = un solo tipo de pie).
+    // Unchecking the active one just leaves it unchecked, without touching the rest.
+    if(value){
+      PIE_DEFS.forEach(p=>{if(p.key!==pieKey)ch.pies[p.key]=false;});
+    }
+  }
   else ch[field]=value;
   // auto-set phantom when micro selected
   if(field==='micro'&&value){
@@ -2636,7 +2811,11 @@ function updCh(aid,idx,field,value){
       if(partner){
         if(isMirroredPie){
           if(!partner.pies)partner.pies={};
-          partner.pies[field.slice(4)]=value;
+          const pieKey=field.slice(4);
+          partner.pies[pieKey]=value;
+          if(value){
+            PIE_DEFS.forEach(p=>{if(p.key!==pieKey)partner.pies[p.key]=false;});
+          }
         } else {
           partner[field]=value;
           if(field==='micro'&&value){
@@ -2646,6 +2825,19 @@ function updCh(aid,idx,field,value){
         }
       }
     }
+  }
+  // Sync sibling pie checkboxes in the DOM so unmarking the others is immediate — no re-render.
+  if(field.startsWith('pie_') && value){
+    const pieKey=field.slice(4);
+    const partnerIdx=getDiLinkPartnerIdx(a,idx);
+    const rowsToSync=partnerIdx!=null?[idx,partnerIdx]:[idx];
+    rowsToSync.forEach(ci=>{
+      PIE_DEFS.forEach(p=>{
+        if(p.key===pieKey)return;
+        const cb=document.querySelector(`input.pie-cb[data-cb-aid="${aid}"][data-cb-chidx="${ci}"][data-cb-pie="${p.key}"]`);
+        if(cb) cb.checked=false;
+      });
+    });
   }
   updBadges(a);updChSum(a);debouncedSave();debouncedSnapshot();
   if(field.startsWith('sb_')) setTimeout(renderArtistNav,0);
@@ -3957,6 +4149,10 @@ function openMapWindow(){
   });
 }
 
+// Returns true when the channel's mic is "propio" — the artist brings their own;
+// it appears in the CH list but must be excluded from all material counts.
+function isMicroPropio(nombre){ return nombre==='__PROPIO__'; }
+
 function isLineInput(microName){
   if(!microName)return false;
   const n=microName.toLowerCase();
@@ -4059,7 +4255,7 @@ function computeSummaryFor(artists){
     const m={};
     a.channels.forEach(ch=>{
       if(ch.premontado)return;
-      if(ch.micro) m[ch.micro]=(m[ch.micro]||0)+1;
+      if(ch.micro&&!isMicroPropio(ch.micro)) m[ch.micro]=(m[ch.micro]||0)+1;
     });
     return m;
   }
@@ -4078,17 +4274,19 @@ function computeSummaryFor(artists){
   const cajetinesByLetter={},linkCablesByLetter={};
   S.subboxes.forEach(sb=>{
     if(fixedLetters.has(sb.letter))return;
-    let sum=0,cables=0;
-    artists.forEach(a=>{
-      const usesLetter=a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim());
-      if(usesLetter){
-        const n=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
-        sum+=n;
-        cables+=Math.max(0,n-1);
-      }
-    });
-    if(sum) cajetinesByLetter[sb.letter]=sum;
-    if(cables) linkCablesByLetter[sb.letter]=cables;
+    const usesLetter=a=>a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim());
+    const nonReuse=artists.filter(a=>!a.reutilizable&&usesLetter(a));
+    const reuse=artists.filter(a=>a.reutilizable&&usesLetter(a));
+    const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
+    const cajSum=nonReuse.reduce((s,a)=>s+cajFor(a),0);
+    const cajMax=Math.max(0,...reuse.map(cajFor));
+    const total=cajSum+cajMax;
+    if(total) cajetinesByLetter[sb.letter]=total;
+    const cabFor=a=>Math.max(0,cajFor(a)-1);
+    const cabSum=nonReuse.reduce((s,a)=>s+cabFor(a),0);
+    const cabMax=Math.max(0,...reuse.map(cabFor));
+    const cablesTotal=cabSum+cabMax;
+    if(cablesTotal) linkCablesByLetter[sb.letter]=cablesTotal;
   });
   return {micCounts,piesCounts,cajetinesByLetter,linkCablesByLetter};
 }
@@ -4215,7 +4413,7 @@ function renderSummary(){
   if(titleEl) titleEl.textContent='Cajetines utilizados';
 
   const tC=artists.reduce((s,a)=>s+a.canales,0);
-  const tM=artists.reduce((s,a)=>s+a.channels.filter(c=>c.micro&&!isLineInput(c.micro)&&!c.premontado).length,0);
+  const tM=artists.reduce((s,a)=>s+a.channels.filter(c=>c.micro&&!isLineInput(c.micro)&&!c.premontado&&!isMicroPropio(c.micro)).length,0);
   const tD=artists.reduce((s,a)=>s+a.channels.filter(c=>c.di).length,0);
   const tP=artists.reduce((s,a)=>s+a.channels.reduce((ss,c)=>ss+PIE_DEFS.filter(p=>c.pies?.[p.key]).length,0),0);
   document.getElementById('summary-stats').innerHTML=[[t('totalCanales'),tC],[t('totalMicros'),tM],[t('totalDIs'),tD],[t('totalPies'),tP],[t('artistas'),artists.length]]
@@ -4223,7 +4421,7 @@ function renderSummary(){
   const aH=artists.map((a,i)=>`<th class="mic-art-h" style="min-width:120px;background:${hex2rgba(ARTIST_COLORS[i%ARTIST_COLORS.length],0.3)};color:${ARTIST_COLORS[i%ARTIST_COLORS.length]}">${esc(a.nombre.slice(0,10))}</th>`).join('');
   const mR=S.micros.map(mic=>{
     const nm=typeof mic==='string'?mic:mic.nombre;
-    const cc=artists.map(a=>a.channels.filter(ch=>ch.micro===nm&&!ch.premontado).length);
+    const cc=artists.map(a=>a.channels.filter(ch=>ch.micro===nm&&!ch.premontado).length); // propio mics filtered at source in countMics
     const isThisMicLocked=(typeof mic==='object'&&mic.locked)||S.micLocked;
     const mTotal=isThisMicLocked?Math.max(0,...cc):cc.reduce((s,n)=>s+n,0);
     const isLocked=(typeof mic==='object'&&mic.locked)||false;
@@ -4425,7 +4623,7 @@ function renderRchListBody(artists){
     artists.forEach(a=>{
       notesRow+=`<div style="flex:0 0 ${COLS_S*80}px;border-right:1px solid var(--border);padding:4px 6px">
         <div style="font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--text3);margin-bottom:2px">NOTAS — ${esc(a.nombre)}</div>
-        <textarea style="width:100%;background:transparent;border:1px solid var(--border2);border-radius:3px;color:var(--text);font-family:var(--font);font-size:11px;padding:3px 6px;resize:vertical;min-height:36px"
+        <textarea style="width:100%;background:transparent;border:1px solid var(--border2);border-radius:3px;color:var(--text);font-family:var(--font);font-size:11px;padding:3px 6px;resize:both;min-height:36px;${notasSizeStyle(a.id)}"
           data-notas-for="${a.id}" oninput="updArtistNotas(${a.id},this.value)">${esc(a.notas||'')}</textarea>
       </div>`;
     });
@@ -4448,7 +4646,7 @@ function renderRchListBody(artists){
           }).filter(Boolean).join(' ');
           row+=`<td style="min-width:60px">${pills||'<span style="color:var(--text3)">—</span>'}</td>`;
           row+=`<td class="ic" style="min-width:90px">${esc(ch.instrumento||'')}</td>`;
-          row+=`<td class="${ch.micro&&!isLineInput(ch.micro)?'mc':'sc'}" style="min-width:80px">${esc(ch.micro||'')}</td>`;
+          row+=`<td class="${ch.micro&&!isLineInput(ch.micro)&&!isMicroPropio(ch.micro)?'mc':'sc'}" style="min-width:80px">${ch.micro==='__PROPIO__'?'<span style="color:var(--blue,#4fc3f7);font-size:10px;font-style:italic">Propio</span>':esc(ch.micro||'')}</td>`;
         }
       });
       row+=`<td class="nc-r">${i+1}</td>`;body+=row+'</tr>';
@@ -4463,7 +4661,7 @@ function renderRchListBody(artists){
   artists.forEach(a=>{
     notesRow+=`<div style="flex:0 0 ${COLS*38}px;border-right:1px solid var(--border);padding:4px 6px;">
       <div style="font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);margin-bottom:3px">NOTAS — ${esc(a.nombre)}</div>
-      <textarea style="width:100%;background:transparent;border:1px solid var(--border2);border-radius:3px;color:var(--text);font-family:var(--font);font-size:11px;padding:4px 6px;resize:vertical;min-height:48px;line-height:1.4"
+      <textarea style="width:100%;background:transparent;border:1px solid var(--border2);border-radius:3px;color:var(--text);font-family:var(--font);font-size:11px;padding:4px 6px;resize:both;min-height:48px;line-height:1.4;${notasSizeStyle(a.id)}"
         placeholder="${t('notasPh')}"
         data-notas-for="${a.id}" oninput="updArtistNotas(${a.id},this.value)">${esc(a.notas||'')}</textarea>
     </div>`;
@@ -4485,7 +4683,7 @@ function renderRchListBody(artists){
       if(!ch){row+=`<td colspan="${COLS}">—</td>`;}
       else{
         sbs.forEach((sb,si)=>{row+=`<td class="sc" style="background:${hex2rgba(sb.color,0.18)}">${esc(ch.subboxes?.[sb.letter]||'')}</td>`;});
-        row+=`<td class="ic">${esc(ch.instrumento||'')}</td><td class="${ch.micro&&!isLineInput(ch.micro)?'mc':'sc'}">${esc(ch.micro||'')}</td>`;
+        row+=`<td class="ic">${esc(ch.instrumento||'')}</td><td class="${ch.micro&&!isLineInput(ch.micro)&&!isMicroPropio(ch.micro)?'mc':'sc'}">${ch.micro==='__PROPIO__'?'<span style="color:var(--blue,#4fc3f7);font-size:10px;font-style:italic">Propio</span>':esc(ch.micro||'')}</td>`;
       }
     });
     row+=`<td class="nc-r">${i+1}</td>`;body+=row+'</tr>';
@@ -4597,7 +4795,7 @@ function renderSbListBody(artists){
     html+=`<div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);font-weight:bold">${esc(a.nombre)}</div>`;
     html+=`<div style="font-size:10px;color:var(--text3)">${a.canales} canales</div>`;
     html+=`</div>`;
-    html+=`<textarea style="width:100%;max-width:640px;background:var(--inp-bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--font);font-size:11px;padding:5px 8px;resize:vertical;min-height:28px;line-height:1.5;margin-bottom:12px;display:block"
+    html+=`<textarea style="width:100%;max-width:none;background:var(--inp-bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--font);font-size:11px;padding:5px 8px;resize:both;min-height:28px;line-height:1.5;margin-bottom:12px;display:block;${notasSizeStyle(a.id)}"
       placeholder="Notas para ${esc(a.nombre)}..."
       data-notas-for="${a.id}" oninput="updArtistNotas(${a.id},this.value)">${esc(a.notas||'')}</textarea>`;
     html+=`<div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">`;
@@ -4620,7 +4818,20 @@ function renderSbListBody(artists){
         s.multi=s.entries.length>1;
       });
       if(!Object.keys(slots).length)return;
-      html+=renderSubboxSVG(sb,slots,a.id);
+      const cajN=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
+      const names=Array.isArray(a.sbCajetinesNames?.[sb.letter])?a.sbCajetinesNames[sb.letter]:[];
+      const nameEditors = cajN>1
+        ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px">
+             ${Array.from({length:cajN},(_,ci)=>{
+               const nm=esc(names[ci]||'');
+               return `<label style="display:inline-flex;align-items:center;gap:3px;font-size:9px;color:var(--text3)">
+                 <span style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:3px;background:${hex2rgba(sb.color,0.4)};color:${sb.color};font-size:9px;font-weight:700">${sb.letter}${ci+1}</span>
+                 <input type="text" value="${nm}" data-cajname="${a.id}-${sb.letter}-${ci}" placeholder="posición" title="Nombre/posición del cajetín ${sb.letter}${ci+1}" style="width:80px;font-size:10px;padding:2px 4px;border:1px solid ${hex2rgba(sb.color,0.5)};border-radius:3px;background:var(--inp-bg);color:var(--text)" oninput="updSbCajetinName(${a.id},'${sb.letter}',${ci},this.value)">
+               </label>`;
+             }).join('')}
+           </div>`
+        : '';
+      html+=`<div style="display:flex;flex-direction:column">${renderSubboxSVG(sb,slots,a.id)}${nameEditors}</div>`;
     });
 
     html+=`</div></div>`;
@@ -4637,7 +4848,7 @@ function renderSbListBody(artists){
       artists.forEach(a=>{
         html+=`<div style="margin-bottom:10px">`;
         html+=`<div style="font-size:10px;color:var(--accent);font-weight:700;letter-spacing:1px;margin-bottom:4px">${esc(a.nombre)}</div>`;
-        html+=`<textarea style="width:100%;max-width:640px;background:var(--inp-bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--font);font-size:11px;padding:5px 8px;resize:vertical;min-height:28px;line-height:1.5;display:block"
+        html+=`<textarea style="width:100%;max-width:none;background:var(--inp-bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--font);font-size:11px;padding:5px 8px;resize:both;min-height:28px;line-height:1.5;display:block;${notasSizeStyle(a.id)}"
           placeholder="Notas..."
           data-notas-for="${a.id}" oninput="updArtistNotas(${a.id},this.value)">${esc(a.notas||'')}</textarea>`;
         html+=`</div>`;
@@ -4749,7 +4960,7 @@ function computeLoadStats(artists){
     const m={};
     a.channels.forEach(ch=>{
       if(ch.premontado)return;
-      if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));if(k&&k!=='XLR')m[k]=(m[k]||0)+1;}
+      if(ch.micro&&!isMicroPropio(ch.micro)){const k=normalizeGearName(cleanForPDF(ch.micro));if(k&&k!=='XLR')m[k]=(m[k]||0)+1;}
     });
     return m;
   }
@@ -4774,26 +4985,64 @@ function computeLoadStats(artists){
     const letter=sb.letter;
     const usesLetter=a=>a.channels.some(ch=>{const v=(ch.subboxes?.[letter]||'').trim();return v&&!isNaN(parseInt(v));});
     if(fixedLetters.has(letter)){
-      if(artists.some(usesLetter)){
-        sbCount[letter]=1;
+      // Mangueras fijas: 1 vez por SET único que la usa (dos bandas en Set A comparten
+      // la misma manguera física; una tercera en Set B añade otra manguera; una cuarta
+      // en Set A vuelve a compartir la primera).
+      const configuredSetIds=new Set((S.mangueraSets||[]).map(s=>s.id));
+      const usedSets=new Set();
+      const artistsUsing=[];
+      artists.forEach(a=>{
+        if(!usesLetter(a))return;
+        artistsUsing.push(a);
+        const setId=a.mangueraSet||'propio';
+        if(setId!=='propio' && !configuredSetIds.has(setId)){
+          usedSets.add('propio-'+a.id);
+        } else if(setId==='propio'){
+          usedSets.add('propio-'+a.id);
+        } else {
+          usedSets.add('set-'+setId);
+        }
+      });
+      const nSets=usedSets.size;
+      if(nSets>0){
+        sbCount[letter]=nSets;
         const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
         const qty=fixedLine?(fixedLine.quantity||1):1;
-        cajetinesByLetter[letter]=qty;
-        // A fixed line's cajetines are daisy-chained together with one link cable per join.
-        if(qty>1) linkCablesByLetter[letter]=qty-1;
+        // Cajetines: independientes por banda, SALVO si están marcadas como reutilizables
+        // (misma regla que micros/pies/DIs). Se cuentan por artista, no por set.
+        let cajSum=0,cajMax=0;
+        artistsUsing.forEach(a=>{
+          if(a.reutilizable) cajMax=Math.max(cajMax,qty);
+          else cajSum+=qty;
+        });
+        cajetinesByLetter[letter]=cajSum+cajMax;
+        // Cables link: mismos por banda (qty-1 por unión), suma para no-reutilizables + máx para reutilizables.
+        if(qty>1){
+          let cabSum=0,cabMax=0;
+          artistsUsing.forEach(a=>{
+            const cbl=qty-1;
+            if(a.reutilizable) cabMax=Math.max(cabMax,cbl);
+            else cabSum+=cbl;
+          });
+          if(cabSum+cabMax>0) linkCablesByLetter[letter]=cabSum+cabMax;
+        }
       }
     } else {
+      // Mangueras variables: 1 por artista (cada banda trae la suya).
+      // Cajetines / cables: misma regla de reutilizable/no reutilizable, coherente con fijas.
       const artistsUsing=artists.filter(usesLetter);
       if(artistsUsing.length){
         sbCount[letter]=artistsUsing.length;
-        cajetinesByLetter[letter]=artistsUsing.reduce((s,a)=>s+Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1)),0);
-        // Each artist's own set of cajetines for this manguera needs (cajetines-1) link cables
-        // to daisy-chain them together — summed across artists, since each artist's cajetines are independent hardware.
-        const cables=artistsUsing.reduce((s,a)=>{
-          const n=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
-          return s+Math.max(0,n-1);
-        },0);
-        if(cables>0) linkCablesByLetter[letter]=cables;
+        const fixedArtV=artistsUsing.filter(a=>!a.reutilizable);
+        const reuseArtV=artistsUsing.filter(a=>a.reutilizable);
+        const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
+        const cajSum=fixedArtV.reduce((s,a)=>s+cajFor(a),0);
+        const cajMax=Math.max(0,...reuseArtV.map(cajFor));
+        cajetinesByLetter[letter]=cajSum+cajMax;
+        const cabFor=a=>Math.max(0,cajFor(a)-1);
+        const cabSum=fixedArtV.reduce((s,a)=>s+cabFor(a),0);
+        const cabMax=Math.max(0,...reuseArtV.map(cabFor));
+        if(cabSum+cabMax>0) linkCablesByLetter[letter]=cabSum+cabMax;
       }
     }
   });
