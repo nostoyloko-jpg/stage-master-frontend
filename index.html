@@ -1654,7 +1654,8 @@ let S={
     {letter:'A',color:'#e94560'},{letter:'B',color:'#4fc3f7'},
     {letter:'C',color:'#1de9b6'},{letter:'D',color:'#ffb347'},
     {letter:'E',color:'#c77dff'},{letter:'F',color:'#ff9a3c'}
-  ]
+  ],
+  mangueraSets:[] // sistemas de mangueras compartidos: [{id:'A',label:'Sistema A',color:'#f59e0b'}]
 };
 function loadS(){
   // Try sm.project first (new), then legacy keys
@@ -1716,6 +1717,15 @@ function migrateState(data){
   else{out.artists=[];}
   out.micLocked=data.micLocked||false;
   out.sbConfig=data.sbConfig||{rows:2,cols:8,fixedLines:[]};
+  // Manguera sets (Sistema A, B, ...) — restore them before the artists' mangueraSet ids are
+  // validated anywhere, otherwise every artist silently falls back to 'propio' on reload.
+  out.mangueraSets=Array.isArray(data.mangueraSets)
+    ? data.mangueraSets.map((s,i)=>({
+        id: s.id||SB_LETTERS[i]||String.fromCharCode(65+i),
+        label: s.label||('Sistema '+(s.id||SB_LETTERS[i]||'')),
+        color: s.color||DEFAULT_MSET_COLORS[i%DEFAULT_MSET_COLORS.length]
+      }))
+    : [];
   return out;
 }
 
@@ -7915,7 +7925,8 @@ function confirmNew(){
       {letter:'A',color:'#e94560'},{letter:'B',color:'#4fc3f7'},
       {letter:'C',color:'#1de9b6'},{letter:'D',color:'#ffb347'},
       {letter:'E',color:'#c77dff'},{letter:'F',color:'#ff9a3c'}
-    ]
+    ],
+    mangueraSets:[]
   };
   _currentDriveFileId = null;
   SM_STORE.setDrive({currentId:null,currentName:null});
@@ -8077,7 +8088,8 @@ function clearAppDataConfirm(){
       {letter:'A',color:'#e94560'},{letter:'B',color:'#4fc3f7'},
       {letter:'C',color:'#1de9b6'},{letter:'D',color:'#ffb347'},
       {letter:'E',color:'#c77dff'},{letter:'F',color:'#ff9a3c'}
-    ]
+    ],
+    mangueraSets:[]
   };
   // 4. Reset UI
   updateDriveStatusBadge();
