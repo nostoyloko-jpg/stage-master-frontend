@@ -2394,11 +2394,11 @@ function buildArtistPage(a){
     const val=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
     const names=Array.isArray(a.sbCajetinesNames?.[sb.letter])?a.sbCajetinesNames[sb.letter]:[];
     // One input per cajetín — only when more than 1 (a single cajetín needs no name distinction).
-    const nameInputs = val>1 ? Array.from({length:val},(_,i)=>{
+    const nameInputs = Array.from({length:val},(_,i)=>{
       const nm=esc(names[i]||'');
       return `<input type="text" value="${nm}" data-cajname="${a.id}-${sb.letter}-${i}" placeholder="${sb.letter}${i+1}" title="Nombre/posición del cajetín ${sb.letter}${i+1} (p.ej. batería, teclas...)" style="width:64px;font-size:10px;padding:2px 4px;border:1px solid ${hex2rgba(sb.color,0.5)};border-radius:3px;background:var(--inp-bg);color:var(--text)" oninput="updSbCajetinName(${a.id},'${sb.letter}',${i},this.value)">`;
-    }).join('') : '';
-    return `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 4px;border-radius:4px;${val>1?'background:'+hex2rgba(sb.color,0.06)+';':''}">
+    }).join('');
+    return `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 4px;border-radius:4px;background:${hex2rgba(sb.color,0.06)}">
       <span style="width:14px;height:14px;border-radius:3px;background:${hex2rgba(sb.color,0.4)};color:${sb.color};font-size:9px;font-weight:700;display:inline-flex;align-items:center;justify-content:center">${sb.letter}</span>
       <input type="number" min="1" max="8" value="${val}" style="width:34px;text-align:center;font-size:11px;padding:2px 3px" title="Cajetines que este artista necesita para Manguera ${sb.letter}" oninput="updSbCajetines(${a.id},'${sb.letter}',this.value)">
       ${nameInputs}
@@ -4337,63 +4337,47 @@ function computeSummaryFor(artists){
   });
   const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
   const configuredSetIds=new Set((S.mangueraSets||[]).map(s=>s.id));
-  // Per-letter results:
-  // - mangueraCountByLetter: how many mangueras total (1 per unique set for fixed, 1 per artist for variable)
-  // - cajetinesByLetter: cajetines total (sum non-reusable + max reusable)
-  // - linkCablesByLetter: link cables total (same rule as cajetines)
-  const mangueraCountByLetter={},cajetinesByLetter={},linkCablesByLetter={};
+  // Resolve which "system" an artist belongs to. Artists on 'propio' (or on a set that no
+  // longer exists) are their own single-artist system.
+  const systemKeyOf=a=>{
+    const setId=a.mangueraSet||'propio';
+    return (setId==='propio'||!configuredSetIds.has(setId)) ? ('propio-'+a.id) : ('set-'+setId);
+  };
+  // Mangueras VARIABLES se comparten dentro de un sistema: dos bandas en Sistema A tiran de la
+  // misma manguera física → 1 por sistema que la use.
+  // Mangueras FIJAS (frontal, sidefill...) quedan fuera de los sistemas: se montan una sola vez
+  // para todo el festival → 1 en total, sin importar cuántos sistemas o bandas las usen.
+  // Cajetines son cajas físicas que cada banda monta → por artista, con la regla reutilizable.
+  const mangueraCountByLetter={},cajetinesByLetter={},linkCablesByLetter={},systemsByLetter={};
   S.subboxes.forEach(sb=>{
     const letter=sb.letter;
     const usesLetter=a=>a.channels.some(ch=>(ch.subboxes?.[letter]||'').trim());
-    if(fixedLetters.has(letter)){
-      // Fija: 1 manguera por sistema único que la use.
-      const usedSets=new Set();
-      const artistsUsing=[];
-      artists.forEach(a=>{
-        if(!usesLetter(a))return;
-        artistsUsing.push(a);
-        const setId=a.mangueraSet||'propio';
-        if(setId==='propio' || !configuredSetIds.has(setId)) usedSets.add('propio-'+a.id);
-        else usedSets.add('set-'+setId);
-      });
-      if(usedSets.size>0){
-        mangueraCountByLetter[letter]=usedSets.size;
-        const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
-        const qty=fixedLine?(fixedLine.quantity||1):1;
-        let cajSum=0,cajMax=0;
-        artistsUsing.forEach(a=>{
-          if(a.reutilizable) cajMax=Math.max(cajMax,qty);
-          else cajSum+=qty;
-        });
-        cajetinesByLetter[letter]=cajSum+cajMax;
-        if(qty>1){
-          let cabSum=0,cabMax=0;
-          artistsUsing.forEach(a=>{
-            if(a.reutilizable) cabMax=Math.max(cabMax,qty-1);
-            else cabSum+=qty-1;
-          });
-          if(cabSum+cabMax>0) linkCablesByLetter[letter]=cabSum+cabMax;
-        }
-      }
+    const artistsUsing=artists.filter(usesLetter);
+    if(!artistsUsing.length)return;
+
+    const isFixed=fixedLetters.has(letter);
+    if(isFixed){
+      mangueraCountByLetter[letter]=1;
+      systemsByLetter[letter]=null; // fuera del esquema de sistemas
     } else {
-      // Variable: 1 manguera por artista que la use. Cajetines/cables por reutilizable/no-reut.
-      const artistsUsing=artists.filter(usesLetter);
-      if(artistsUsing.length){
-        mangueraCountByLetter[letter]=artistsUsing.length;
-        const nonReuse=artistsUsing.filter(a=>!a.reutilizable);
-        const reuse=artistsUsing.filter(a=>a.reutilizable);
-        const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
-        const cajSum=nonReuse.reduce((s,a)=>s+cajFor(a),0);
-        const cajMax=Math.max(0,...reuse.map(cajFor));
-        cajetinesByLetter[letter]=cajSum+cajMax;
-        const cabFor=a=>Math.max(0,cajFor(a)-1);
-        const cabSum=nonReuse.reduce((s,a)=>s+cabFor(a),0);
-        const cabMax=Math.max(0,...reuse.map(cabFor));
-        if(cabSum+cabMax>0) linkCablesByLetter[letter]=cabSum+cabMax;
-      }
+      const usedSystems=new Set(artistsUsing.map(systemKeyOf));
+      mangueraCountByLetter[letter]=usedSystems.size;
+      systemsByLetter[letter]=usedSystems;
     }
+
+    // Cajetines per artist: fixed lines use the fixed quantity, variables use sbCajetines.
+    const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
+    const cajFor=a=>fixedLine
+      ? (fixedLine.quantity||1)
+      : Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
+    const nonReuse=artistsUsing.filter(a=>!a.reutilizable);
+    const reuse=artistsUsing.filter(a=>a.reutilizable);
+    cajetinesByLetter[letter]=nonReuse.reduce((s,a)=>s+cajFor(a),0)+Math.max(0,...reuse.map(cajFor));
+    const cabFor=a=>Math.max(0,cajFor(a)-1);
+    const cabTotal=nonReuse.reduce((s,a)=>s+cabFor(a),0)+Math.max(0,...reuse.map(cabFor));
+    if(cabTotal>0) linkCablesByLetter[letter]=cabTotal;
   });
-  return {micCounts,piesCounts,mangueraCountByLetter,cajetinesByLetter,linkCablesByLetter};
+  return {micCounts,piesCounts,mangueraCountByLetter,cajetinesByLetter,linkCablesByLetter,systemsByLetter};
 }
 
 function renderSummary(){
@@ -4592,51 +4576,84 @@ function renderSummary(){
     const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
     const configuredSetIds=new Set((S.mangueraSets||[]).map(s=>s.id));
 
-    // ── MANGUERAS TABLE (mangueras + cables link) ──
+    // ── MANGUERAS TABLE — agrupada por SISTEMA ──
+    // Cada sistema (A, B, ... o "Propio" de un artista suelto) lleva su propio juego de
+    // mangueras: dos bandas del mismo sistema comparten la misma manguera física.
     if(mangEl){
       const mangTitleEl=document.getElementById('mangueras-summary-title');
-      if(mangTitleEl) mangTitleEl.textContent='Mangueras utilizadas';
-      const mangRows=S.subboxes.map(sb=>{
-        const letter=sb.letter;
-        const usesLetter=a=>a.channels.some(ch=>(ch.subboxes?.[letter]||'').trim());
-        const isFixed=fixedLetters.has(letter);
-        let counts,total,cableCounts,cableTotal;
-        if(isFixed){
-          // Fija: la celda del artista marca "1" si aporta un sistema nuevo aún no contado.
-          const usedSets=new Set();
-          counts=artists.map(a=>{
-            if(!usesLetter(a))return '';
-            const setId=a.mangueraSet||'propio';
-            const key=(setId==='propio'||!configuredSetIds.has(setId))?('propio-'+a.id):('set-'+setId);
-            if(usedSets.has(key))return '·'; // mismo sistema ya contado a la izquierda
-            usedSets.add(key);return 1;
+      if(mangTitleEl) mangTitleEl.textContent='Mangueras utilizadas (por sistema)';
+      const systemKeyOf=a=>{
+        const setId=a.mangueraSet||'propio';
+        return (setId==='propio'||!configuredSetIds.has(setId)) ? ('propio-'+a.id) : ('set-'+setId);
+      };
+      // Build system → {label, color, artists[]}
+      const systems=new Map();
+      artists.forEach(a=>{
+        const key=systemKeyOf(a);
+        if(!systems.has(key)){
+          const isSet=key.startsWith('set-');
+          const setId=isSet?key.slice(4):null;
+          const setObj=isSet?(S.mangueraSets||[]).find(s=>s.id===setId):null;
+          systems.set(key,{
+            label: isSet ? (setObj?.label||('Sistema '+setId)) : ('Propio — '+a.nombre),
+            badge: isSet ? setId : '—',
+            color: isSet ? (setObj?.color||'var(--accent)') : 'var(--text3)',
+            artists: []
           });
-          total=[...usedSets].length;
-          const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
-          const qty=fixedLine?(fixedLine.quantity||1):1;
-          cableTotal=total*Math.max(0,qty-1);
-          cableCounts=null;
-        } else {
-          counts=artists.map(a=>usesLetter(a)?1:0);
-          total=counts.reduce((s,n)=>s+(typeof n==='number'?n:0),0);
-          cableCounts=artists.map(a=>{
-            if(!usesLetter(a))return 0;
-            const n=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
-            return Math.max(0,n-1);
-          });
-          cableTotal=cableCounts.reduce((s,n)=>s+n,0);
         }
-        if(!total && !cableTotal)return'';
-        const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
-        const fixLbl=isFixed?' <span style="font-size:9px;color:var(--text3)">(fija)</span>':'';
-        let out=`<tr><td class="left">${dot}Manguera ${letter}${fixLbl}</td>${counts.map(n=>`<td class="${n?'':'zero'}" style="text-align:center">${n||'—'}</td>`).join('')}<td class="tcol">${total}</td></tr>`;
-        if(cableTotal>0){
-          const cableCellsHtml=(cableCounts||artists.map(()=>'')).map(n=>`<td style="font-size:11px;color:var(--text3);text-align:center">${n||'—'}</td>`).join('');
-          out+=`<tr style="opacity:.8"><td class="left" style="padding-left:22px;font-size:11px;color:var(--text3)">↳ Cables link</td>${cableCellsHtml}<td class="tcol" style="font-size:11px;color:var(--text3)">${cableTotal}</td></tr>`;
-        }
-        return out;
-      }).filter(Boolean).join('');
-      mangEl.innerHTML=`<thead><tr><th class="left">Manguera</th>${aH}<th>Total</th></tr></thead><tbody>${mangRows||'<tr><td colspan="'+(artists.length+2)+'" class="empty-state">Sin datos</td></tr>'}</tbody>`;
+        systems.get(key).artists.push(a);
+      });
+      const varSbs=S.subboxes.filter(sb=>!fixedLetters.has(sb.letter));
+      const letters=varSbs.map(sb=>sb.letter);
+      const letterCols=varSbs.map(sb=>`<th style="min-width:60px;text-align:center;background:${hex2rgba(sb.color,0.25)};color:${sb.color};font-weight:800">${sb.letter}</th>`).join('');
+      let rowsHtml='';
+      const colTotals={};letters.forEach(l=>colTotals[l]=0);
+      let cablesGrand=0;
+      systems.forEach((sys,key)=>{
+        const cells=varSbs.map(sb=>{
+          const uses=sys.artists.some(a=>a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim()));
+          if(uses)colTotals[sb.letter]++;
+          return `<td class="${uses?'':'zero'}" style="text-align:center;${uses?'background:'+hex2rgba(sb.color,0.10)+';font-weight:700':''}">${uses?1:'—'}</td>`;
+        }).join('');
+        const rowTotal=varSbs.filter(sb=>sys.artists.some(a=>a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim()))).length;
+        if(!rowTotal)return; // sistema sin mangueras variables
+        const names=sys.artists.map(a=>esc(a.nombre)).join(', ');
+        rowsHtml+=`<tr>
+          <td class="left">
+            <span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:4px;background:${sys.color};color:#fff;font-weight:800;font-size:10px;margin-right:8px;vertical-align:middle">${esc(sys.badge)}</span>
+            <b>${esc(sys.label)}</b>
+            <div style="font-size:9px;color:var(--text3);margin-top:2px;padding-left:28px">${names}</div>
+          </td>
+          ${cells}
+          <td class="tcol">${rowTotal}</td>
+        </tr>`;
+      });
+      // Cables link row — total across all letters (per-artist rule, not per-system).
+      // Compute the stats once; calling computeSummaryFor per cell would be O(n²).
+      const _cabStats=computeSummaryFor(artists).linkCablesByLetter||{};
+      letters.forEach(l=>{cablesGrand+=(_cabStats[l]||0);});
+      const totalMang=Object.values(colTotals).reduce((s,n)=>s+n,0);
+      const totalsRow=`<tr style="font-weight:700;border-top:2px solid var(--border2)">
+        <td class="left" style="color:var(--accent)">TOTAL mangueras (sistemas)</td>
+        ${varSbs.map(sb=>`<td style="text-align:center;color:var(--accent)">${colTotals[sb.letter]||'—'}</td>`).join('')}
+        <td class="tcol" style="color:var(--accent)">${totalMang}</td>
+      </tr>`;
+      const cablesRow=cablesGrand>0?`<tr style="opacity:.85">
+        <td class="left" style="font-size:11px;color:var(--text3)">↳ Cables link (total, por banda)</td>
+        ${varSbs.map(sb=>{const n=_cabStats[sb.letter]||0;return `<td style="text-align:center;font-size:11px;color:var(--text3)">${n||'—'}</td>`;}).join('')}
+        <td class="tcol" style="font-size:11px;color:var(--text3)">${cablesGrand}</td>
+      </tr>`:'';
+      // Fixed mangueras sit OUTSIDE the system grid — rigged once for the whole festival.
+      const fixedSbs=S.subboxes.filter(sb=>fixedLetters.has(sb.letter)&&artists.some(a=>a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim())));
+      const fixedRowsHtml=fixedSbs.length?`
+        <tr><td colspan="${varSbs.length+2}" style="padding-top:10px;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);border-top:1px solid var(--border)">Mangueras fijas — fuera de los sistemas, se montan 1 vez</td></tr>
+        ${fixedSbs.map(sb=>{
+          const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
+          const fl=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===sb.letter);
+          const lbl=fl?esc(fl.label||'Fija'):'Fija';
+          return `<tr style="opacity:.9"><td class="left">${dot}⚓ Manguera ${sb.letter} — ${lbl}</td>${varSbs.map(()=>'<td></td>').join('')}<td class="tcol">1</td></tr>`;
+        }).join('')}`:'';
+      mangEl.innerHTML=`<thead><tr><th class="left" style="min-width:180px">Sistema</th>${letterCols}<th>Total</th></tr></thead><tbody>${rowsHtml||'<tr><td colspan="'+(varSbs.length+2)+'" class="empty-state">Sin mangueras variables</td></tr>'}${rowsHtml?totalsRow+cablesRow:''}${fixedRowsHtml}</tbody>`;
     }
 
     // ── CAJETINES TABLE (physical breakout boxes only) ──
@@ -4989,8 +5006,7 @@ function renderSbListBody(artists){
       if(!Object.keys(slots).length)return;
       const cajN=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
       const names=Array.isArray(a.sbCajetinesNames?.[sb.letter])?a.sbCajetinesNames[sb.letter]:[];
-      const nameEditors = cajN>1
-        ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px">
+      const nameEditors = `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px">
              ${Array.from({length:cajN},(_,ci)=>{
                const nm=esc(names[ci]||'');
                return `<label style="display:inline-flex;align-items:center;gap:3px;font-size:9px;color:var(--text3)">
@@ -4998,8 +5014,7 @@ function renderSbListBody(artists){
                  <input type="text" value="${nm}" data-cajname="${a.id}-${sb.letter}-${ci}" placeholder="posición" title="Nombre/posición del cajetín ${sb.letter}${ci+1}" style="width:80px;font-size:10px;padding:2px 4px;border:1px solid ${hex2rgba(sb.color,0.5)};border-radius:3px;background:var(--inp-bg);color:var(--text)" oninput="updSbCajetinName(${a.id},'${sb.letter}',${ci},this.value)">
                </label>`;
              }).join('')}
-           </div>`
-        : '';
+           </div>`;
       html+=`<div style="display:flex;flex-direction:column">${renderSubboxSVG(sb,slots,a.id)}${nameEditors}</div>`;
     });
 
@@ -5154,64 +5169,46 @@ function computeLoadStats(artists){
     const letter=sb.letter;
     const usesLetter=a=>a.channels.some(ch=>{const v=(ch.subboxes?.[letter]||'').trim();return v&&!isNaN(parseInt(v));});
     if(fixedLetters.has(letter)){
-      // Mangueras fijas: 1 vez por SET único que la usa (dos bandas en Set A comparten
-      // la misma manguera física; una tercera en Set B añade otra manguera; una cuarta
-      // en Set A vuelve a compartir la primera).
-      const configuredSetIds=new Set((S.mangueraSets||[]).map(s=>s.id));
-      const usedSets=new Set();
-      const artistsUsing=[];
-      artists.forEach(a=>{
-        if(!usesLetter(a))return;
-        artistsUsing.push(a);
-        const setId=a.mangueraSet||'propio';
-        if(setId!=='propio' && !configuredSetIds.has(setId)){
-          usedSets.add('propio-'+a.id);
-        } else if(setId==='propio'){
-          usedSets.add('propio-'+a.id);
-        } else {
-          usedSets.add('set-'+setId);
-        }
-      });
-      const nSets=usedSets.size;
-      if(nSets>0){
-        sbCount[letter]=nSets;
+      // Manguera FIJA (frontal, sidefill...): fuera de los sistemas — se monta 1 sola vez
+      // para todo el festival, la usen los sistemas o bandas que la usen.
+      const artistsUsing=artists.filter(usesLetter);
+      if(artistsUsing.length){
+        sbCount[letter]=1;
         const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
         const qty=fixedLine?(fixedLine.quantity||1):1;
-        // Cajetines: independientes por banda, SALVO si están marcadas como reutilizables
-        // (misma regla que micros/pies/DIs). Se cuentan por artista, no por set.
+        // Cajetines: cajas físicas por banda (regla reutilizable/no reutilizable).
         let cajSum=0,cajMax=0;
         artistsUsing.forEach(a=>{
           if(a.reutilizable) cajMax=Math.max(cajMax,qty);
           else cajSum+=qty;
         });
         cajetinesByLetter[letter]=cajSum+cajMax;
-        // Cables link: mismos por banda (qty-1 por unión), suma para no-reutilizables + máx para reutilizables.
         if(qty>1){
           let cabSum=0,cabMax=0;
           artistsUsing.forEach(a=>{
-            const cbl=qty-1;
-            if(a.reutilizable) cabMax=Math.max(cabMax,cbl);
-            else cabSum+=cbl;
+            if(a.reutilizable) cabMax=Math.max(cabMax,qty-1);
+            else cabSum+=qty-1;
           });
           if(cabSum+cabMax>0) linkCablesByLetter[letter]=cabSum+cabMax;
         }
       }
     } else {
-      // Mangueras variables: 1 por artista (cada banda trae la suya).
-      // Cajetines / cables: misma regla de reutilizable/no reutilizable, coherente con fijas.
+      // Manguera VARIABLE: compartida dentro de cada sistema → 1 por sistema que la use.
       const artistsUsing=artists.filter(usesLetter);
       if(artistsUsing.length){
-        sbCount[letter]=artistsUsing.length;
-        const fixedArtV=artistsUsing.filter(a=>!a.reutilizable);
-        const reuseArtV=artistsUsing.filter(a=>a.reutilizable);
+        const configuredSetIds2=new Set((S.mangueraSets||[]).map(s=>s.id));
+        const usedSystems=new Set(artistsUsing.map(a=>{
+          const setId=a.mangueraSet||'propio';
+          return (setId==='propio'||!configuredSetIds2.has(setId))?('propio-'+a.id):('set-'+setId);
+        }));
+        sbCount[letter]=usedSystems.size;
+        const nonReuse=artistsUsing.filter(a=>!a.reutilizable);
+        const reuse=artistsUsing.filter(a=>a.reutilizable);
         const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
-        const cajSum=fixedArtV.reduce((s,a)=>s+cajFor(a),0);
-        const cajMax=Math.max(0,...reuseArtV.map(cajFor));
-        cajetinesByLetter[letter]=cajSum+cajMax;
+        cajetinesByLetter[letter]=nonReuse.reduce((s,a)=>s+cajFor(a),0)+Math.max(0,...reuse.map(cajFor));
         const cabFor=a=>Math.max(0,cajFor(a)-1);
-        const cabSum=fixedArtV.reduce((s,a)=>s+cabFor(a),0);
-        const cabMax=Math.max(0,...reuseArtV.map(cabFor));
-        if(cabSum+cabMax>0) linkCablesByLetter[letter]=cabSum+cabMax;
+        const cabTotal=nonReuse.reduce((s,a)=>s+cabFor(a),0)+Math.max(0,...reuse.map(cabFor));
+        if(cabTotal>0) linkCablesByLetter[letter]=cabTotal;
       }
     }
   });
