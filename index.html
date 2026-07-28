@@ -1637,6 +1637,9 @@ const AI_CONFIG = {
 const PIE_DEFS_BASE=[{key:'C',lkey:'pieCorto'},{key:'A',lkey:'pieAlto'},{key:'P',lkey:'piePinza'},{key:'R',lkey:'pieRecto'}];
 const PIE_DEFS=PIE_DEFS_BASE.map(p=>({key:p.key,label:t(p.lkey),lkey:p.lkey}));
 const DEFAULT_SB_COLORS=['#e94560','#4fc3f7','#1de9b6','#ffb347','#c77dff','#ff9a3c','#84fab0','#f77f00'];
+// Colours for manguera "sets" (Sistema A, B, ...) — deliberately different from subbox colours so the two
+// don't blur together visually in the CH list.
+const DEFAULT_MSET_COLORS=['#f59e0b','#8b5cf6','#10b981','#ec4899','#3b82f6','#facc15','#14b8a6','#f97316'];
 const SB_LETTERS=['A','B','C','D','E','F','G','H'];
 
 // ── STATE ──
@@ -2112,9 +2115,12 @@ function renderSBConfig(){
 function updMangueraSetsCount(val){
   const n=Math.max(0,Math.min(8,parseInt(val)||0));
   if(!Array.isArray(S.mangueraSets))S.mangueraSets=[];
+  // Back-fill colors for any pre-existing set that was created before this feature.
+  S.mangueraSets.forEach((s,i)=>{if(!s.color)s.color=DEFAULT_MSET_COLORS[i%DEFAULT_MSET_COLORS.length];});
   while(S.mangueraSets.length<n){
-    const id=SB_LETTERS[S.mangueraSets.length];
-    S.mangueraSets.push({id,label:'Sistema '+id});
+    const idx=S.mangueraSets.length;
+    const id=SB_LETTERS[idx];
+    S.mangueraSets.push({id,label:'Sistema '+id,color:DEFAULT_MSET_COLORS[idx%DEFAULT_MSET_COLORS.length]});
   }
   // When shrinking, artists on removed sets fall back to 'propio'.
   if(S.mangueraSets.length>n){
@@ -2129,21 +2135,71 @@ function updMangueraSetLabel(i,label){
   S.mangueraSets[i].label=label;
   debouncedSave();
 }
+function updMangueraSetColor(i,color){
+  if(!S.mangueraSets?.[i])return;
+  S.mangueraSets[i].color=color;
+  renderMangueraSetsConfig();rebuildArtistPages();saveS();
+}
+// Look up the color of a given set id — returns null when the id isn't a real set (e.g. "propio").
+function getMangueraSetColor(setId){
+  const s=(S.mangueraSets||[]).find(x=>x.id===setId);
+  return s?.color||null;
+}
+function getMangueraSetLabel(setId){
+  const s=(S.mangueraSets||[]).find(x=>x.id===setId);
+  return s?(s.label||('Sistema '+s.id)):null;
+}
+function renameMangueraSetFromChList(aid){
+  const a=S.artists.find(x=>x.id===aid);if(!a)return;
+  if(a.mangueraSet==='propio')return;
+  const i=(S.mangueraSets||[]).findIndex(s=>s.id===a.mangueraSet);
+  if(i<0)return;
+  const cur=S.mangueraSets[i].label||('Sistema '+S.mangueraSets[i].id);
+  const nv=prompt('Nuevo nombre para el sistema '+S.mangueraSets[i].id+':', cur);
+  if(nv==null)return;
+  const trimmed=nv.trim();
+  if(!trimmed)return;
+  S.mangueraSets[i].label=trimmed;
+  saveS();snapshot();rebuildArtistPages();renderLoadOut();renderSummary();
+  renderMangueraSetsConfig();
+}
 function renderMangueraSetsConfig(){
   const list=document.getElementById('mset-config-list');
   if(!list)return;
   const sets=S.mangueraSets||[];
   if(!sets.length){list.innerHTML='<div style="font-size:11px;color:var(--text3);font-style:italic;padding:6px 0">Sin sets configurados — cada artista cuenta como set independiente ("Propio")</div>';return;}
-  list.innerHTML=sets.map((s,i)=>`
+  list.innerHTML=sets.map((s,i)=>{
+    const color=s.color||DEFAULT_MSET_COLORS[i%DEFAULT_MSET_COLORS.length];
+    return `
     <div style="display:flex;align-items:center;gap:8px;padding:5px 0">
-      <div style="width:22px;height:22px;border-radius:4px;background:var(--accent);color:#fff;font-weight:800;font-size:11px;display:inline-flex;align-items:center;justify-content:center">${s.id}</div>
+      <div style="width:22px;height:22px;border-radius:4px;background:${color};color:#fff;font-weight:800;font-size:11px;display:inline-flex;align-items:center;justify-content:center">${s.id}</div>
+      <input type="color" value="${color}" title="Color del sistema ${s.id}" oninput="updMangueraSetColor(${i},this.value)" style="width:32px;height:28px;border-radius:4px;border:1px solid var(--border2);cursor:pointer;padding:1px">
       <input type="text" value="${esc(s.label||'')}" placeholder="Sistema ${s.id}" style="flex:1;max-width:280px;font-size:12px;padding:4px 8px" oninput="updMangueraSetLabel(${i},this.value)">
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 function updArtistMangueraSet(aid,setId){
   const a=S.artists.find(x=>x.id===aid);if(!a)return;
   a.mangueraSet=setId;
-  saveS();snapshot();renderLoadOut();renderSummary();
+  saveS();snapshot();rebuildArtistPages();renderLoadOut();renderSummary();
+}
+
+// Create a new manguera set from within the CH list and immediately assign this artist to it.
+function addMangueraSetFromChList(aid){
+  const a=S.artists.find(x=>x.id===aid);if(!a)return;
+  if(!Array.isArray(S.mangueraSets))S.mangueraSets=[];
+  if(S.mangueraSets.length>=8){
+    alert('Máximo 8 sistemas.');
+    return;
+  }
+  const idx=S.mangueraSets.length;
+  const id=SB_LETTERS[idx];
+  S.mangueraSets.push({id,label:'Sistema '+id,color:DEFAULT_MSET_COLORS[idx%DEFAULT_MSET_COLORS.length]});
+  a.mangueraSet=id;
+  saveS();snapshot();rebuildArtistPages();renderLoadOut();renderSummary();
+  // Reflect in Configuración panel if it's currently visible.
+  renderMangueraSetsConfig();
+  const nsetsInp=document.getElementById('cfg-nsets');if(nsetsInp)nsetsInp.value=S.mangueraSets.length;
 }
 
 function updSubboxCount(val){
@@ -2485,14 +2541,22 @@ function buildArtistPage(a){
           <span class="badge badge-blue"  id="bpr-${a.id}">—</span>
         </div>
       </div>
-      ${(S.mangueraSets||[]).length ? `<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--border);background:linear-gradient(90deg,rgba(79,195,247,0.06),transparent)">
+      ${((S.mangueraSets||[]).length || a.mangueraSet!=='propio') ? (()=>{
+        const currentColor = getMangueraSetColor(a.mangueraSet) || 'var(--text3)';
+        const isPropio = a.mangueraSet==='propio';
+        return `<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--border);background:linear-gradient(90deg,${isPropio?'rgba(255,255,255,0.03)':hex2rgba(currentColor,0.10)},transparent)">
         <span style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text2);font-weight:700">Set de mangueras</span>
-        <select onchange="updArtistMangueraSet(${a.id},this.value)" style="font-size:13px;font-weight:700;padding:5px 10px;letter-spacing:.5px;background:var(--bg3);border:1px solid var(--border2);border-radius:5px;color:var(--text);min-width:200px;cursor:pointer">
-          ${S.mangueraSets.map(s=>`<option value="${esc(s.id)}" ${a.mangueraSet===s.id?'selected':''}>${esc(s.id)} — ${esc(s.label||('Sistema '+s.id))}</option>`).join('')}
-          <option value="propio" ${a.mangueraSet==='propio'?'selected':''} style="font-style:italic">Propio (set independiente para este artista)</option>
-        </select>
-        <span style="font-size:10px;color:var(--text3);flex:1;font-style:italic">Los artistas del mismo set comparten mangueras fijas: solo cuentan 1 vez para el recuento.</span>
-      </div>` : ''}
+        <span style="display:inline-flex;align-items:center;gap:0">
+          <span style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:5px 0 0 5px;background:${isPropio?'var(--bg3)':currentColor};color:${isPropio?'var(--text3)':'#fff'};font-weight:800;font-size:12px;border:1px solid ${isPropio?'var(--border2)':currentColor};border-right:none">${isPropio?'—':a.mangueraSet}</span>
+          <select onchange="updArtistMangueraSet(${a.id},this.value)" style="font-size:13px;font-weight:700;padding:5px 10px;letter-spacing:.5px;background:var(--bg3);border:1px solid ${isPropio?'var(--border2)':currentColor};border-left:none;border-radius:0 5px 5px 0;color:var(--text);min-width:180px;cursor:pointer">
+            ${(S.mangueraSets||[]).map(s=>`<option value="${esc(s.id)}" ${a.mangueraSet===s.id?'selected':''}>${esc(s.label||('Sistema '+s.id))}</option>`).join('')}
+            <option value="propio" ${a.mangueraSet==='propio'?'selected':''} style="font-style:italic">Propio (set independiente)</option>
+          </select>
+        </span>
+        <button class="btn btn-sm" onclick="renameMangueraSetFromChList(${a.id})" title="Renombrar el sistema seleccionado (${esc(getMangueraSetLabel(a.mangueraSet)||'—')})" style="font-size:10px;padding:5px 8px" ${a.mangueraSet==='propio'?'disabled':''}>✏️</button>
+        <button class="btn btn-sm" onclick="addMangueraSetFromChList(${a.id})" title="Crear un nuevo sistema y asignarlo a este artista" style="font-size:10px;letter-spacing:.5px;padding:5px 10px">+ Nuevo sistema</button>
+        <span style="font-size:10px;color:var(--text3);flex:1;font-style:italic">Los artistas del mismo set comparten mangueras fijas: solo cuentan 1 vez.</span>
+      </div>`;})() : ''}
       <div style="padding:8px 14px;border-bottom:1px solid var(--border);background:var(--bg2)">
         <div style="font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);margin-bottom:3px">${t('notasLabel').toUpperCase()}</div>
         <textarea id="artist-notas-${a.id}" data-notas-for="${a.id}" style="width:100%;max-width:none;background:var(--inp-bg);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--font);font-size:11px;padding:5px 8px;resize:both;min-height:34px;line-height:1.5;display:block;${notasSizeStyle(a.id)}"
@@ -5062,16 +5126,25 @@ function buildLoadRows(stats){
     .filter(x=>x.n>0).forEach(({l,n})=>{
       const sp=spare(n,0.25);rows.push({cat:"PIE",item:l,need:n,spare:sp,total:n+sp});
     });
-  Object.entries(stats.sbCount).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([letter,n])=>{
+  // Sort so all mangueras come first, then their link cables, then all cajetines.
+  const letters=Object.keys(stats.sbCount).sort((a,b)=>a.localeCompare(b));
+  letters.forEach(letter=>{
+    const n=stats.sbCount[letter];
     const label=stats.fixedLetters.has(letter)?`Manguera ${letter} (fija)`:`Manguera ${letter}`;
-    rows.push({cat:"SUBBOX",item:label,need:n,spare:"—",total:n,key:`SUBBOX_M_${letter}`});
-    const cajetines=stats.cajetinesByLetter[letter]||0;
-    if(cajetines>n){
-      rows.push({cat:"SUBBOX",item:`↳ Cajetines — Manguera ${letter} ×${cajetines}`,need:cajetines,spare:"—",total:cajetines,key:`SUBBOX_CAJ_${letter}`});
-    }
+    rows.push({cat:"MANGUERA",item:label,need:n,spare:"—",total:n,key:`MANG_M_${letter}`});
+  });
+  letters.forEach(letter=>{
+    const n=stats.sbCount[letter];
     const cables=stats.linkCablesByLetter[letter]||0;
     if(cables>0){
-      rows.push({cat:"SUBBOX",item:`↳ Cables link — Manguera ${letter} ×${cables}`,need:cables,spare:"—",total:cables,key:`SUBBOX_CAB_${letter}`});
+      rows.push({cat:"MANGUERA",item:`↳ Cables link — Manguera ${letter} ×${cables}`,need:cables,spare:"—",total:cables,key:`MANG_CAB_${letter}`});
+    }
+  });
+  letters.forEach(letter=>{
+    const n=stats.sbCount[letter];
+    const cajetines=stats.cajetinesByLetter[letter]||0;
+    if(cajetines>0){
+      rows.push({cat:"CAJETIN",item:`Cajetines — Manguera ${letter} ×${cajetines}`,need:cajetines,spare:"—",total:cajetines,key:`CAJ_${letter}`});
     }
   });
   return rows;
@@ -5127,7 +5200,7 @@ function renderLoadOut(){
     });
   });
   const totalRows=Object.values(maxMap).sort((a,b)=>{
-    const catOrder={MICRO:0,DI:1,PIE:2,SUBBOX:3};
+    const catOrder={MICRO:0,DI:1,PIE:2,MANGUERA:3,CAJETIN:4};
     if(catOrder[a.cat]!==catOrder[b.cat])return catOrder[a.cat]-catOrder[b.cat];
     if(a.cat==='MICRO')return b.total-a.total;
     return a.item.localeCompare(b.item);
@@ -5138,8 +5211,8 @@ function renderLoadOut(){
   const validTabs=['total',...perDay.map((_,i)=>'day-'+i)];
   if(!validTabs.includes(_loActiveTab))_loActiveTab='total';
 
-  const catColor={MICRO:"var(--blue,#4fc3f7)",DI:"var(--green,#1de9b6)",PIE:"var(--amber,#f59e0b)",SUBBOX:"var(--accent)"};
-  const catBg={MICRO:"rgba(79,195,247,0.08)",DI:"rgba(29,233,182,0.08)",PIE:"rgba(245,158,11,0.08)",SUBBOX:"rgba(233,69,96,0.08)"};
+  const catColor={MICRO:"var(--blue,#4fc3f7)",DI:"var(--green,#1de9b6)",PIE:"var(--amber,#f59e0b)",MANGUERA:"var(--accent)",CAJETIN:"#c77dff"};
+  const catBg={MICRO:"rgba(79,195,247,0.08)",DI:"rgba(29,233,182,0.08)",PIE:"rgba(245,158,11,0.08)",MANGUERA:"rgba(233,69,96,0.08)",CAJETIN:"rgba(199,125,255,0.10)"};
 
   function tableFor(rows,isTotalTab){
     let html=`<table class="lineup-table" style="width:100%;min-width:560px">
@@ -8823,18 +8896,23 @@ async function runPdfExport(){
         rows.push(['PIE', label, n, sp, n+sp, '', '']);
       });
 
-      // Mangueras — one row per manguera, plus a cajetines row when it spans multiple stage positions,
-      // and a link-cables row for the cables needed to daisy-chain those cajetines together.
-      Object.entries(pdfSbCount).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([letter,n])=>{
+      // Mangueras — one row per manguera, then their link cables together, then all cajetines.
+      const pdfLetters=Object.keys(pdfSbCount).sort((a,b)=>a.localeCompare(b));
+      pdfLetters.forEach(letter=>{
+        const n=pdfSbCount[letter];
         const label=pdfFixedLetters.has(letter)?`Manguera ${letter} (fija)`:`Manguera ${letter}`;
-        rows.push(['SUBBOX', label, n, '—', n, '', '']);
-        const cajetines=getCajetinesTotal(letter);
-        if(cajetines>n){
-          rows.push(['SUBBOX', `↳ Cajetines — Manguera ${letter} ×${cajetines}`, cajetines, '—', cajetines, '', '']);
-        }
+        rows.push(['MANGUERA', label, n, '—', n, '', '']);
+      });
+      pdfLetters.forEach(letter=>{
         const cables=getLinkCablesTotal(letter);
         if(cables>0){
-          rows.push(['SUBBOX', `↳ Cables link — Manguera ${letter} ×${cables}`, cables, '—', cables, '', '']);
+          rows.push(['MANGUERA', `↳ Cables link — Manguera ${letter} ×${cables}`, cables, '—', cables, '', '']);
+        }
+      });
+      pdfLetters.forEach(letter=>{
+        const cajetines=getCajetinesTotal(letter);
+        if(cajetines>0){
+          rows.push(['CAJETIN', `Cajetines — Manguera ${letter} ×${cajetines}`, cajetines, '—', cajetines, '', '']);
         }
       });
 
@@ -8874,7 +8952,8 @@ async function runPdfExport(){
             if(cat==='MICRO') data.cell.styles.fillColor=[245,245,255];
             if(cat==='DI') data.cell.styles.fillColor=[245,255,245];
             if(cat==='PIE') data.cell.styles.fillColor=[255,250,240];
-            if(cat==='SUBBOX') data.cell.styles.fillColor=[255,245,245];
+            if(cat==='MANGUERA') data.cell.styles.fillColor=[255,245,245];
+            if(cat==='CAJETIN') data.cell.styles.fillColor=[248,240,255];
           }
         },
         margin:{left:M, right:M, bottom:14},
