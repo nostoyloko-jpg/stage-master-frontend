@@ -8908,28 +8908,28 @@ async function runPdfExport(){
     pdf.setFillColor(...ACCENT); pdf.rect(0,0,6,PH,'F');
 
     const cx=PW/2;
-    // Nombre del festival
-    pdf.setFont('helvetica','normal'); pdf.setFontSize(11); pdf.setTextColor(...GRAY3);
-    pdf.text(safe(S.event.nombre||'',60), cx, PH/2-24, {align:'center'});
+    // Nombre del festival — es el titular principal de la portada.
+    pdf.setFont('helvetica','bold'); pdf.setFontSize(24); pdf.setTextColor(...BLACK);
+    pdf.text(safe(S.event.nombre||'',50), cx, PH/2-14, {align:'center'});
 
-    // Título de la sección
-    pdf.setFont('helvetica','bold'); pdf.setFontSize(26); pdf.setTextColor(...BLACK);
-    pdf.text(safe(String(title||'').toUpperCase(),44), cx, PH/2-6, {align:'center'});
+    // Línea de acento
+    pdf.setDrawColor(...ACCENT); pdf.setLineWidth(0.8);
+    pdf.line(cx-30, PH/2-6, cx+30, PH/2-6);
 
-    // Línea de acento bajo el título
-    pdf.setDrawColor(...ACCENT); pdf.setLineWidth(1);
-    pdf.line(cx-40, PH/2+1, cx+40, PH/2+1);
+    // Sección — etiqueta secundaria en color de acento, letras espaciadas.
+    pdf.setFont('helvetica','bold'); pdf.setFontSize(15); pdf.setTextColor(...ACCENT);
+    pdf.text(safe(String(title||'').toUpperCase(),44), cx, PH/2+4, {align:'center', charSpace:1.2});
 
     if(subtitle){
       pdf.setFont('helvetica','normal'); pdf.setFontSize(9); pdf.setTextColor(...GRAY3);
-      pdf.text(safe(subtitle,80), cx, PH/2+11, {align:'center'});
+      pdf.text(safe(subtitle,80), cx, PH/2+13, {align:'center'});
     }
 
     // Pie con lugar y fecha
     const foot=[S.event.lugar, S.event.tecnico?'Técnico: '+S.event.tecnico:''].filter(Boolean).join('   |   ');
     if(foot){
       pdf.setFontSize(8); pdf.setTextColor(...GRAY3);
-      pdf.text(safe(foot,90), cx, PH/2+22, {align:'center'});
+      pdf.text(safe(foot,90), cx, PH/2+24, {align:'center'});
     }
     pdf.setFontSize(7); pdf.setTextColor(...GRAY3);
     pdf.text('(c) Luis Anton  lag.sound@gmail.com', PW-M, PH-8, {align:'right'});
@@ -9005,125 +9005,122 @@ async function runPdfExport(){
 
     // ── 3. RESUMEN MICROFONIA ──
     else if(sec.id==='summary'){
-      pdf.addPage([PW,PH],'l');
-      pdf.setFillColor(...BG); pdf.rect(0,0,PW,PH,'F');
-      pdf.setFillColor(...ACCENT); pdf.rect(0,0,PW,4,'F');
-      pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(...BLACK);
-      pdf.text('RESUMEN MICROFONÍA  |  '+safe(S.event.nombre||'',50), M, 13);
+      // Con muchos artistas, meterlos todos como columnas de una sola tabla apretaba tanto
+      // el ancho que los nombres se solapaban. Ahora se agrupan por DÍA (como en la pantalla),
+      // y si un día concreto aún tuviera demasiados artistas para caber legibles, se reparte
+      // en más de una página dentro de ese mismo día.
+      const MIN_COL_MM=15, ROW_LABEL_W=50, TOTAL_COL_W=16;
+      const availW = PW-M*2-ROW_LABEL_W-TOTAL_COL_W;
+      const maxPerPage = Math.max(3, Math.floor(availW/MIN_COL_MM));
+      const days=groupArtistsByDate();
 
-      // Artist column width — distribute evenly
-      const artistColW = Math.min(35, Math.floor((PW-M*2-50-16) / Math.max(S.artists.length,1)));
+      // Draws the 3 tables (micros, pies, totales) for a given artist subset onto a fresh page.
+      function drawSummaryPageFor(subset, pageLabel){
+        pdf.addPage([PW,PH],'l');
+        pdf.setFillColor(...BG); pdf.rect(0,0,PW,PH,'F');
+        pdf.setFillColor(...ACCENT); pdf.rect(0,0,PW,4,'F');
+        pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(...BLACK);
+        pdf.text('RESUMEN MICROFONÍA  |  '+safe(S.event.nombre||'',40), M, 13);
+        pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY3);
+        pdf.text(pageLabel, M, 19);
 
-      // ── MICRÓFONOS TABLE ──
-      pdf.setFont('helvetica','bold'); pdf.setFontSize(8); pdf.setTextColor(...ACCENT);
-      pdf.text('MICRÓFONOS', M, 20);
+        const artistColW=Math.max(MIN_COL_MM, Math.floor(availW/Math.max(subset.length,1)));
 
-      const micHead = ['Micrófono', ...S.artists.map(a=>safe(a.nombre,10)), 'Total'];
-      const micBody = [];
-      // Build normalized mic count across all channels
-      const allMicNorm={};
-      S.artists.forEach(a=>a.channels.forEach(ch=>{
-        if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));if(k==='XLR')return;allMicNorm[k]=(allMicNorm[k]||{});S.artists.forEach((a2,i)=>{
-          if(!allMicNorm[k][i]) allMicNorm[k][i]=0;
-        });}
-      }));
-      S.artists.forEach((a,ai)=>a.channels.forEach(ch=>{
-        if(ch.micro){const k=normalizeGearName(cleanForPDF(ch.micro));if(k==='XLR')return;if(!allMicNorm[k])allMicNorm[k]={};allMicNorm[k][ai]=(allMicNorm[k][ai]||0)+1;}
-      }));
-      Object.entries(allMicNorm).sort((a,b)=>{
-        const ta=Object.values(a[1]).reduce((s,n)=>s+n,0);
-        const tb=Object.values(b[1]).reduce((s,n)=>s+n,0);
-        return tb-ta;
-      }).forEach(([nm,perArtist])=>{
-        const counts=S.artists.map((_,i)=>perArtist[i]||0);
-        const total=counts.reduce((s,n)=>s+n,0);
-        if(!total) return;
-        micBody.push([nm,...counts.map(n=>n||''),total]);
-      });
-
-      if(micBody.length){
-        const micColStyles = {0:{cellWidth:50, fontStyle:'bold'}};
-        S.artists.forEach((_,i)=>{ micColStyles[i+1]={cellWidth:artistColW, halign:'center'}; });
-        micColStyles[S.artists.length+1]={cellWidth:16, halign:'center', fontStyle:'bold', textColor:ACCENT};
-
-        pdf.autoTable({
-          ...AT_STYLES,
-          startY:22,
-          head:[micHead],
-          body:micBody,
-          columnStyles:micColStyles,
-          headStyles:{...AT_STYLES.headStyles, fontSize:7},
-          styles:{...AT_STYLES.styles, fontSize:7.5, cellPadding:1.5},
-          margin:{left:M, right:M, bottom:8},
-        });
-      }
-
-      // ── PIES TABLE ──
-      const pieY = (micBody.length ? pdf.lastAutoTable.finalY : 22) + 5;
-      if(pieY < PH-40){
+        // ── MICRÓFONOS ──
         pdf.setFont('helvetica','bold'); pdf.setFontSize(8); pdf.setTextColor(...ACCENT);
-        pdf.text('PIES DE MICRÓFONO', M, pieY);
-
-        const PIE_KEYS = [{key:'C',label:'Pie Corto'},{key:'A',label:'Pie Alto'},{key:'P',label:'Pie Pinza'},{key:'R',label:'Pie Recto'}];
-        const pieHead = ['Pie', ...S.artists.map(a=>safe(a.nombre,10)), 'Total'];
-        const pieBody = PIE_KEYS.map(p=>{
-          const counts = S.artists.map(a=>a.channels.filter(ch=>ch.pies?.[p.key]).length);
-          const total = counts.reduce((s,n)=>s+n,0);
-          if(!total) return null;
-          return [p.label, ...counts.map(n=>n||''), total];
+        pdf.text('MICRÓFONOS', M, 26);
+        const micHead=['Micrófono', ...subset.map(a=>safe(a.nombre,12)), 'Total'];
+        const micMap={};
+        subset.forEach((a,ai)=>a.channels.forEach(ch=>{
+          if(!ch.micro)return;
+          const k=normalizeGearName(cleanForPDF(ch.micro));
+          if(k==='XLR'||isMicroPropio(ch.micro))return;
+          if(!micMap[k])micMap[k]={};
+          micMap[k][ai]=(micMap[k][ai]||0)+1;
+        }));
+        const micBody=Object.entries(micMap).sort((a,b)=>{
+          const ta=Object.values(a[1]).reduce((s,n)=>s+n,0), tb=Object.values(b[1]).reduce((s,n)=>s+n,0);
+          return tb-ta;
+        }).map(([nm,perArtist])=>{
+          const counts=subset.map((_,i)=>perArtist[i]||0);
+          const total=counts.reduce((s,n)=>s+n,0);
+          return total?[nm,...counts.map(n=>n||''),total]:null;
         }).filter(Boolean);
 
-        if(pieBody.length){
-          const pieColStyles = {0:{cellWidth:50, fontStyle:'bold'}};
-          S.artists.forEach((_,i)=>{ pieColStyles[i+1]={cellWidth:artistColW, halign:'center'}; });
-          pieColStyles[S.artists.length+1]={cellWidth:16, halign:'center', fontStyle:'bold', textColor:ACCENT};
-
+        let cursorY=28;
+        if(micBody.length){
+          const micColStyles={0:{cellWidth:ROW_LABEL_W, fontStyle:'bold'}};
+          subset.forEach((_,i)=>{micColStyles[i+1]={cellWidth:artistColW, halign:'center'};});
+          micColStyles[subset.length+1]={cellWidth:TOTAL_COL_W, halign:'center', fontStyle:'bold', textColor:ACCENT};
           pdf.autoTable({
-            ...AT_STYLES,
-            startY:pieY+2,
-            head:[pieHead],
-            body:pieBody,
-            columnStyles:pieColStyles,
-            headStyles:{...AT_STYLES.headStyles, fontSize:7},
-            styles:{...AT_STYLES.styles, fontSize:7.5, cellPadding:1.5},
+            ...AT_STYLES, startY:cursorY, head:[micHead], body:micBody, columnStyles:micColStyles,
+            headStyles:{...AT_STYLES.headStyles, fontSize:7}, styles:{...AT_STYLES.styles, fontSize:7.5, cellPadding:1.5},
+            margin:{left:M, right:M, bottom:8},
+          });
+          cursorY=pdf.lastAutoTable.finalY+6;
+        }
+
+        // ── PIES ──
+        if(cursorY<PH-40){
+          pdf.setFont('helvetica','bold'); pdf.setFontSize(8); pdf.setTextColor(...ACCENT);
+          pdf.text('PIES DE MICRÓFONO', M, cursorY);
+          const pieHead=['Pie', ...subset.map(a=>safe(a.nombre,12)), 'Total'];
+          const pieBody=PIE_DEFS.map(p=>{
+            const counts=subset.map(a=>a.channels.filter(ch=>ch.pies?.[p.key]).length);
+            const total=counts.reduce((s,n)=>s+n,0);
+            return total?[p.label,...counts.map(n=>n||''),total]:null;
+          }).filter(Boolean);
+          if(pieBody.length){
+            const pieColStyles={0:{cellWidth:ROW_LABEL_W, fontStyle:'bold'}};
+            subset.forEach((_,i)=>{pieColStyles[i+1]={cellWidth:artistColW, halign:'center'};});
+            pieColStyles[subset.length+1]={cellWidth:TOTAL_COL_W, halign:'center', fontStyle:'bold', textColor:ACCENT};
+            pdf.autoTable({
+              ...AT_STYLES, startY:cursorY+2, head:[pieHead], body:pieBody, columnStyles:pieColStyles,
+              headStyles:{...AT_STYLES.headStyles, fontSize:7}, styles:{...AT_STYLES.styles, fontSize:7.5, cellPadding:1.5},
+              margin:{left:M, right:M, bottom:8},
+            });
+            cursorY=pdf.lastAutoTable.finalY+6;
+          }
+        }
+
+        // ── TOTALES POR ARTISTA ──
+        if(cursorY<PH-35){
+          pdf.setFont('helvetica','bold'); pdf.setFontSize(8); pdf.setTextColor(...ACCENT);
+          pdf.text('TOTALES POR ARTISTA', M, cursorY);
+          const totHead=['', ...subset.map(a=>safe(a.nombre,12)), 'Total'];
+          const totRows=[
+            ['Canales',   ...subset.map(a=>a.channels.length), subset.reduce((s,a)=>s+a.channels.length,0)],
+            ['Con micro', ...subset.map(a=>a.channels.filter(ch=>ch.micro).length), subset.reduce((s,a)=>s+a.channels.filter(ch=>ch.micro).length,0)],
+            ['DI Mono',   ...subset.map(a=>a.channels.filter(ch=>ch.di==='M').length), subset.reduce((s,a)=>s+a.channels.filter(ch=>ch.di==='M').length,0)],
+            ['DI Stereo', ...subset.map(a=>countStereoDiBoxes(a)), subset.reduce((s,a)=>s+countStereoDiBoxes(a),0)],
+            ['48V',       ...subset.map(a=>a.channels.filter(ch=>ch.phantom).length), subset.reduce((s,a)=>s+a.channels.filter(ch=>ch.phantom).length,0)],
+          ];
+          const totColStyles={0:{cellWidth:ROW_LABEL_W, fontStyle:'bold'}};
+          subset.forEach((_,i)=>{totColStyles[i+1]={cellWidth:artistColW, halign:'center'};});
+          totColStyles[subset.length+1]={cellWidth:TOTAL_COL_W, halign:'center', fontStyle:'bold', textColor:ACCENT};
+          pdf.autoTable({
+            ...AT_STYLES, startY:cursorY+2, head:[totHead], body:totRows, columnStyles:totColStyles,
+            headStyles:{...AT_STYLES.headStyles, fontSize:7}, styles:{...AT_STYLES.styles, fontSize:7.5, cellPadding:1.5},
             margin:{left:M, right:M, bottom:8},
           });
         }
+        addFooter(pdf,'Resumen Material');
       }
 
-      // ── TOTALES TABLE ──
-      const totY = pdf.lastAutoTable ? pdf.lastAutoTable.finalY+5 : pieY+5;
-      if(totY < PH-35){
-        pdf.setFont('helvetica','bold'); pdf.setFontSize(8); pdf.setTextColor(...ACCENT);
-        pdf.text('TOTALES POR ARTISTA', M, totY);
-
-        const totHead = ['', ...S.artists.map(a=>safe(a.nombre,10)), 'Total'];
-        const totRows = [
-          ['Canales',    ...S.artists.map(a=>a.channels.length),                                                   S.artists.reduce((s,a)=>s+a.channels.length,0)],
-          ['Con micro',  ...S.artists.map(a=>a.channels.filter(ch=>ch.micro).length),                             S.artists.reduce((s,a)=>s+a.channels.filter(ch=>ch.micro).length,0)],
-          ['DI Mono',    ...S.artists.map(a=>a.channels.filter(ch=>ch.di==='M').length),                          S.artists.reduce((s,a)=>s+a.channels.filter(ch=>ch.di==='M').length,0)],
-          ['DI Stereo',  ...S.artists.map(a=>countStereoDiBoxes(a)),                                             S.artists.reduce((s,a)=>s+countStereoDiBoxes(a),0)],
-          ['48V',        ...S.artists.map(a=>a.channels.filter(ch=>ch.phantom).length),                           S.artists.reduce((s,a)=>s+a.channels.filter(ch=>ch.phantom).length,0)],
-          ['Propios',    ...S.artists.map(a=>a.channels.filter(ch=>(ch.obs||'').toLowerCase().includes('propio')).length), S.artists.reduce((s,a)=>s+a.channels.filter(ch=>(ch.obs||'').toLowerCase().includes('propio')).length,0)],
-        ];
-
-        const totColStyles = {0:{cellWidth:50, fontStyle:'bold'}};
-        S.artists.forEach((_,i)=>{ totColStyles[i+1]={cellWidth:artistColW, halign:'center'}; });
-        totColStyles[S.artists.length+1]={cellWidth:16, halign:'center', fontStyle:'bold', textColor:ACCENT};
-
-        pdf.autoTable({
-          ...AT_STYLES,
-          startY:totY+2,
-          head:[totHead],
-          body:totRows,
-          columnStyles:totColStyles,
-          headStyles:{...AT_STYLES.headStyles, fontSize:7},
-          styles:{...AT_STYLES.styles, fontSize:7.5, cellPadding:1.5},
-          margin:{left:M, right:M, bottom:8},
-        });
-      }
-
-      addFooter(pdf,'Resumen Material');
+      const multiDay=days.length>1;
+      days.forEach((d,di)=>{
+        // Si el día tiene más artistas de los que caben legibles, se reparte en varias páginas.
+        for(let i=0;i<d.artists.length;i+=maxPerPage){
+          const chunk=d.artists.slice(i,i+maxPerPage);
+          const totalChunks=Math.ceil(d.artists.length/maxPerPage);
+          const chunkIdx=Math.floor(i/maxPerPage)+1;
+          const label = multiDay
+            ? (d.label + (totalChunks>1?` (${chunkIdx}/${totalChunks})`:''))
+            : (totalChunks>1?`Artistas ${chunkIdx}/${totalChunks}`:'Todos los artistas');
+          drawSummaryPageFor(chunk, label);
+        }
+      });
+      if(!days.length) drawSummaryPageFor([], 'Sin artistas');
     }
 
     // ── LOAD OUT ──
