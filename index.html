@@ -4432,24 +4432,20 @@ function computeSummaryFor(artists){
     });
     return m;
   }
-  // Regla ♻: el material de un artista reutilizable sale del stock que ya está en el recinto,
-  // así que NO suma. Solo obliga a llevar más si su propia necesidad supera lo que aportan los
-  // artistas no reutilizables → Total = máx( suma(no reutilizables), máx(reutilizables) ).
+  // Regla ♻: un artista NO reutilizable necesita su propio material (se suma). Los artistas
+  // marcados como reutilizables comparten un mismo juego entre ellos —el set del primero se
+  // recoge y se remonta para el siguiente—, así que entre ellos basta con el MAYOR.
+  //   Total = suma(no reutilizables) + máx(reutilizables)
   const micCounts={};
-  const nonReuseMics={},reuseMics={};
-  fixedArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{nonReuseMics[k]=(nonReuseMics[k]||0)+n;});});
+  fixedArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{micCounts[k]=(micCounts[k]||0)+n;});});
+  const reuseMics={};
   reuseArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{reuseMics[k]=Math.max(reuseMics[k]||0,n);});});
-  new Set([...Object.keys(nonReuseMics),...Object.keys(reuseMics)]).forEach(k=>{
-    micCounts[k]=Math.max(nonReuseMics[k]||0, reuseMics[k]||0);
-  });
+  Object.entries(reuseMics).forEach(([k,n])=>{micCounts[k]=(micCounts[k]||0)+n;});
 
   const piesCounts={C:0,A:0,P:0,R:0};
   PIE_DEFS.forEach(p=>{
     const cnt=a=>a.channels.filter(ch=>ch.pies?.[p.key]).length;
-    piesCounts[p.key]=Math.max(
-      fixedArt.reduce((s,a)=>s+cnt(a),0),
-      Math.max(0,...reuseArt.map(cnt),0)
-    );
+    piesCounts[p.key]=fixedArt.reduce((s,a)=>s+cnt(a),0)+Math.max(0,...reuseArt.map(cnt),0);
   });
   const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
   const configuredSetIds=new Set((S.mangueraSets||[]).map(s=>s.id));
@@ -4491,9 +4487,9 @@ function computeSummaryFor(artists){
       const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
       const nonReuse=artistsUsing.filter(a=>!a.reutilizable);
       const reuse=artistsUsing.filter(a=>a.reutilizable);
-      cajetinesByLetter[letter]=Math.max(nonReuse.reduce((s,a)=>s+cajFor(a),0), Math.max(0,...reuse.map(cajFor)));
+      cajetinesByLetter[letter]=nonReuse.reduce((s,a)=>s+cajFor(a),0)+Math.max(0,...reuse.map(cajFor));
       const cabFor=a=>Math.max(0,cajFor(a)-1);
-      const cabTotal=Math.max(nonReuse.reduce((s,a)=>s+cabFor(a),0), Math.max(0,...reuse.map(cabFor)));
+      const cabTotal=nonReuse.reduce((s,a)=>s+cabFor(a),0)+Math.max(0,...reuse.map(cabFor));
       if(cabTotal>0) linkCablesByLetter[letter]=cabTotal;
     }
   });
@@ -4677,7 +4673,7 @@ function renderSummary(){
   const aH=artists.map((a,i)=>{
     const col=ARTIST_COLORS[i%ARTIST_COLORS.length];
     const reut=a.reutilizable;
-    return `<th class="mic-art-h" style="min-width:120px;background:${hex2rgba(col,reut?0.14:0.3)};color:${col};${reut?'border-bottom:2px solid var(--blue,#4fc3f7)':''}" ${reut?'title="Material reutilizable — no suma al total, sale del stock ya montado"':''}>${esc(a.nombre.slice(0,10))}${reut?' <span style="color:var(--blue,#4fc3f7);font-size:9px">♻</span>':''}</th>`;
+    return `<th class="mic-art-h" style="min-width:120px;background:${hex2rgba(col,reut?0.14:0.3)};color:${col};${reut?'border-bottom:2px solid var(--blue,#4fc3f7)':''}" ${reut?'title="Material reutilizable — comparte juego con los demás ♻: entre ellos solo cuenta el mayor"':''}>${esc(a.nombre.slice(0,10))}${reut?' <span style="color:var(--blue,#4fc3f7);font-size:9px">♻</span>':''}</th>`;
   }).join('');
   const mR=S.micros.map(mic=>{
     const nm=typeof mic==='string'?mic:mic.nombre;
@@ -4687,15 +4683,15 @@ function renderSummary(){
       return a.channels.filter((ch,i)=>ch.micro===nm&&!ch.premontado&&!shared.has(i)).length;
     });
     const isThisMicLocked=(typeof mic==='object'&&mic.locked)||S.micLocked;
-    // Regla ♻: los reutilizables no suman — solo elevan el mínimo necesario.
+    // Regla ♻: los no reutilizables suman; los reutilizables comparten juego → solo el mayor.
     const sumNonReuse=cc.reduce((s,n,ci)=>s+(artists[ci]?.reutilizable?0:n),0);
-    const maxReuse=Math.max(0,...cc.filter((_,ci)=>artists[ci]?.reutilizable));
-    const mTotal=isThisMicLocked?Math.max(0,...cc):Math.max(sumNonReuse,maxReuse);
+    const maxReuse=Math.max(0,...cc.filter((_,ci)=>artists[ci]?.reutilizable),0);
+    const mTotal=isThisMicLocked?Math.max(0,...cc):sumNonReuse+maxReuse;
     const isLocked=(typeof mic==='object'&&mic.locked)||false;
     const lockMark=isLocked?'<span style="color:var(--amber,#f59e0b);margin-right:4px;font-size:10px">🔒</span>':'';
     return mTotal?`<tr><td class="left">${lockMark}${esc(nm)}</td>${cc.map((n,ci)=>{
       const reut=artists[ci]?.reutilizable;
-      return `<td class="${n?'':'zero'}"${reut&&n?' style="opacity:.55;font-style:italic" title="Reutilizable — no suma al total"':''}>${n||''}</td>`;
+      return `<td class="${n?'':'zero'}"${reut&&n?' style="opacity:.55;font-style:italic" title="Reutilizable — entre artistas ♻ solo cuenta el mayor"':''}>${n||''}</td>`;
     }).join('')}<td class="tcol" style="${isLocked?'color:var(--amber,#f59e0b)':''}">${mTotal}</td><td class="left" style="color:var(--text3)">${esc(nm)}</td></tr>`:'';
   }).join('');
   document.getElementById('mic-summary-table').innerHTML=`<thead><tr><th class="left">${t('micro')}</th>${aH}<th class="tcol">Total</th><th class="left mic-sticky-r" style="color:var(--text3)">${t('micro')}</th></tr></thead><tbody>${mR||`<tr><td colspan="${artists.length+3}" class="empty-state">${t('sinDatos')}</td></tr>`}</tbody>`;
@@ -4722,13 +4718,11 @@ function renderSummary(){
   }, 200);
   const pR=PIE_DEFS.map(p=>{
     const pCounts=artists.map(a=>a.channels.filter(ch=>ch.pies?.[p.key]).length);
-    const pTotal=Math.max(
-      pCounts.reduce((s,n,ci)=>s+(artists[ci]?.reutilizable?0:n),0),
-      Math.max(0,...pCounts.filter((_,ci)=>artists[ci]?.reutilizable))
-    );
+    const pTotal=pCounts.reduce((s,n,ci)=>s+(artists[ci]?.reutilizable?0:n),0)
+      + Math.max(0,...pCounts.filter((_,ci)=>artists[ci]?.reutilizable),0);
     return`<tr><td class="left">${t('pieLbl')} ${t(p.lkey||'pieCorto')}</td>${pCounts.map((n,ci)=>{
       const reut=artists[ci]?.reutilizable;
-      return `<td class="${n?'':'zero'}"${reut&&n?' style="opacity:.55;font-style:italic" title="Reutilizable — no suma al total"':''}>${n||''}</td>`;
+      return `<td class="${n?'':'zero'}"${reut&&n?' style="opacity:.55;font-style:italic" title="Reutilizable — entre artistas ♻ solo cuenta el mayor"':''}>${n||''}</td>`;
     }).join('')}<td class="tcol">${pTotal}</td></tr>`;
   }).join('');
   document.getElementById('pies-summary-table').innerHTML=`<thead><tr><th class="left">${t('pieLbl')}</th>${aH}<th>Total</th></tr></thead><tbody>${pR}</tbody>`;
@@ -4860,7 +4854,7 @@ function renderSummary(){
         const reuse=artists.filter(a=>a.reutilizable&&usesLetter(a));
         const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
         counts=artists.map(a=>usesLetter(a)?cajFor(a):0);
-        total=Math.max(nonReuse.reduce((s,a)=>s+cajFor(a),0), Math.max(0,...reuse.map(cajFor)));
+        total=nonReuse.reduce((s,a)=>s+cajFor(a),0)+Math.max(0,...reuse.map(cajFor));
       }
       if(!total)return'';
       cajGrand+=total;
@@ -5340,24 +5334,22 @@ function computeLoadStats(artists){
     });
     return m;
   }
-  // Regla ♻ — ver computeSummaryFor: los reutilizables no suman, solo elevan el mínimo.
+  // Regla ♻ — ver computeSummaryFor: suma(no reutilizables) + máx(reutilizables).
   const micCount={};
-  const nonReuseMics={},reuseMics={};
-  fixedArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{nonReuseMics[k]=(nonReuseMics[k]||0)+n;});});
+  fixedArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{micCount[k]=(micCount[k]||0)+n;});});
+  const reuseMics={};
   reuseArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{reuseMics[k]=Math.max(reuseMics[k]||0,n);});});
-  new Set([...Object.keys(nonReuseMics),...Object.keys(reuseMics)]).forEach(k=>{
-    micCount[k]=Math.max(nonReuseMics[k]||0, reuseMics[k]||0);
-  });
+  Object.entries(reuseMics).forEach(([k,n])=>{micCount[k]=(micCount[k]||0)+n;});
 
   function countDi(a,type){
     if(type==='ST') return countStereoDiBoxes(a);
     return a.channels.filter(ch=>ch.di===type).length;
   }
-  const diM=Math.max(fixedArt.reduce((s,a)=>s+countDi(a,"M"),0), Math.max(0,...reuseArt.map(a=>countDi(a,"M")),0));
-  const diST=Math.max(fixedArt.reduce((s,a)=>s+countDi(a,"ST"),0), Math.max(0,...reuseArt.map(a=>countDi(a,"ST")),0));
+  const diM=fixedArt.reduce((s,a)=>s+countDi(a,"M"),0)+Math.max(0,...reuseArt.map(a=>countDi(a,"M")),0);
+  const diST=fixedArt.reduce((s,a)=>s+countDi(a,"ST"),0)+Math.max(0,...reuseArt.map(a=>countDi(a,"ST")),0);
 
   function countPie(a,key){return a.channels.filter(ch=>ch.pies?.[key]).length;}
-  const piCalc=k=>Math.max(fixedArt.reduce((s,a)=>s+countPie(a,k),0), Math.max(0,...reuseArt.map(a=>countPie(a,k)),0));
+  const piCalc=k=>fixedArt.reduce((s,a)=>s+countPie(a,k),0)+Math.max(0,...reuseArt.map(a=>countPie(a,k)),0);
   const piC=piCalc('C'), piA=piCalc('A'), piP=piCalc('P'), piR=piCalc('R');
   const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
   const sbCount={},cajetinesByLetter={},linkCablesByLetter={};
@@ -5390,9 +5382,9 @@ function computeLoadStats(artists){
         const nonReuse=artistsUsing.filter(a=>!a.reutilizable);
         const reuse=artistsUsing.filter(a=>a.reutilizable);
         const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
-        cajetinesByLetter[letter]=Math.max(nonReuse.reduce((s,a)=>s+cajFor(a),0), Math.max(0,...reuse.map(cajFor)));
+        cajetinesByLetter[letter]=nonReuse.reduce((s,a)=>s+cajFor(a),0)+Math.max(0,...reuse.map(cajFor));
         const cabFor=a=>Math.max(0,cajFor(a)-1);
-        const cabTotal=Math.max(nonReuse.reduce((s,a)=>s+cabFor(a),0), Math.max(0,...reuse.map(cabFor)));
+        const cabTotal=nonReuse.reduce((s,a)=>s+cabFor(a),0)+Math.max(0,...reuse.map(cabFor));
         if(cabTotal>0) linkCablesByLetter[letter]=cabTotal;
       }
     }
