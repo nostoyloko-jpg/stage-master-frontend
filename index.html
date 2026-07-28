@@ -1922,8 +1922,43 @@ function initDefaultMicros(){
 
 // ── NAVIGATION ──
 let curPage='config',curAid=null;
+// Exporta a PDF SOLO la sección que se está viendo, respetando la pestaña activa
+// (p.ej. en Resumen material, si estás en "★ Máximo festival" exporta esa vista).
+function printCurrentSection(){
+  let id=null;
+  if(curPage==='summary'){
+    // La pestaña activa decide qué apartado tiene sentido exportar.
+    id = (_summaryActiveTab==='max') ? 'maxfest' : 'summary';
+  }
+  else if(curPage==='orden')   id='orden';
+  else if(curPage==='loadout') id='loadout';
+  else if(curPage==='rchlist') id='rchlist';
+  else if(curPage==='sblist')  id='sblist';
+  else if(curPage==='artist'&&curAid) id='artist-'+curAid;
+  else if(curPage==='plan'&&curAid)   id='artist-'+curAid;
+  if(!id){alert('Esta sección no se puede exportar por separado.');return;}
+
+  // Deja marcado solo el apartado actual y restaura la selección previa al terminar.
+  const prev = Array.isArray(_pdfSections) ? _pdfSections.map(s=>({...s})) : null;
+  const only = getPdfSections().map(s=>({...s, checked: s.id===id}));
+  if(!only.some(s=>s.checked)){
+    alert('Esta sección no está disponible para exportar.');
+    return;
+  }
+  _pdfSections = only;
+  Promise.resolve(runPdfExport()).finally(()=>{ if(prev) _pdfSections = prev; });
+}
+
+// Muestra el botón de imprimir en todas las páginas salvo Configuración.
+function updPrintSectionBtn(){
+  const btn=document.getElementById('print-section-btn');
+  if(!btn)return;
+  btn.style.display = (curPage&&curPage!=='config') ? 'block' : 'none';
+}
+
 function nav(page,aid){
   curPage=page;curAid=aid||null;
+  setTimeout(updPrintSectionBtn,0);
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   const pm={config:'page-config',orden:'page-orden',summary:'page-summary',rchlist:'page-rchlist',sblist:'page-sblist',loadout:'page-loadout'};
@@ -4477,7 +4512,7 @@ function renderSummary(){
   } else {
     tabsEl.innerHTML='';tabsEl.style.display='none';
   }
-  window._summarySetTab=function(id){_summaryActiveTab=id;renderSummary();};
+  window._summarySetTab=function(id){_summaryActiveTab=id;renderSummary();updPrintSectionBtn();};
 
   // ──────────────────────────────────────────────────────────────────
   // MAX MODE — simplified 2-column tables with max per element across days
@@ -8662,6 +8697,7 @@ function getPdfSections(){
   const sections=[
     {id:'orden',    label:'Orden del día',        sub:'Lineup y timeline',       pageId:'page-orden',   checked:true},
     {id:'summary',  label:'Resumen material',   sub:'Totales y desglose',      pageId:'page-summary', checked:true},
+    {id:'maxfest',  label:'Máximo festival',    sub:'Material a preparar · máx. por día', pageId:'', checked:true},
     {id:'loadout',  label:'Load Out',             sub:'Material + spares',       pageId:'',             checked:true},
     {id:'rchlist',  label:'Resumen CH List',      sub:'Todos los artistas',      pageId:'page-rchlist', checked:true},
     {id:'sblist',   label:'Resumen Cajetines',       sub:'Diagrama visual',         pageId:'page-sblist',  checked:true},
@@ -9054,6 +9090,112 @@ async function runPdfExport(){
     }
 
     // ── LOAD OUT ──
+    else if(sec.id==='maxfest'){
+      // Replica la pestaña "★ Máximo festival" de Resumen material: una columna por día y una
+      // columna MÁXIMO, que es el material que hay que preparar para el festival.
+      const days=groupArtistsByDate();
+      const perDay=days.map(d=>({...d,stats:computeSummaryFor(d.artists)}));
+
+      pdf.addPage([210,297],'p');
+      pdf.setFillColor(...BG); pdf.rect(0,0,210,297,'F');
+      pdf.setFillColor(...ACCENT); pdf.rect(0,0,210,4,'F');
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(...BLACK);
+      pdf.text('MÁXIMO FESTIVAL  |  '+safe(S.event.nombre||'',40), M, 13);
+      pdf.setFont('helvetica','normal'); pdf.setFontSize(7); pdf.setTextColor(...GRAY3);
+      pdf.text('Material a preparar = máximo necesario en un mismo día', M, 19);
+
+      const dayHeads=perDay.map(d=>safe(d.label,12));
+      let cursorY=25;
+
+      // Helper: draw one section with a title and a day-columns table.
+      function maxTable(title, rows, totalLabel, totalValue){
+        if(!rows.length) return;
+        pdf.autoTable({
+          ...AT_STYLES,
+          startY: cursorY,
+          head: [[title, ...dayHeads, 'MÁXIMO']],
+          body: rows,
+          headStyles:{...AT_STYLES.headStyles, fillColor:[50,50,50], textColor:[255,255,255]},
+          columnStyles: Object.assign(
+            {0:{cellWidth:58, fontStyle:'bold'}},
+            ...dayHeads.map((_,i)=>({[i+1]:{cellWidth:'auto', halign:'center'}})),
+            {[dayHeads.length+1]:{cellWidth:20, halign:'center', fontStyle:'bold', textColor:ACCENT}}
+          ),
+          didParseCell: function(data){
+            if(data.section!=='body')return;
+            // Bold the MÁXIMO column — that's the figure to act on.
+            if(data.column.index===dayHeads.length+1){
+              data.cell.styles.fontStyle='bold';
+              data.cell.styles.textColor=ACCENT;
+            }
+            // Highlight any TOTAL row.
+            if(String(data.row.raw?.[0]||'').startsWith('TOTAL')){
+              data.cell.styles.fillColor=[240,240,240];
+              data.cell.styles.fontStyle='bold';
+            }
+          },
+          margin:{left:M, right:M, bottom:14},
+        });
+        cursorY = pdf.lastAutoTable.finalY + 6;
+      }
+
+      // ── Micros ──
+      const allMics=new Set();
+      perDay.forEach(d=>Object.keys(d.stats.micCounts).forEach(n=>allMics.add(n)));
+      const micRows=[...allMics].sort().map(nm=>{
+        const perDayVals=perDay.map(d=>d.stats.micCounts[nm]||0);
+        const max=Math.max(0,...perDayVals);
+        return [safe(nm,30), ...perDayVals.map(n=>n||'—'), max];
+      }).filter(r=>r[r.length-1]>0);
+      maxTable('Micrófono', micRows);
+
+      // ── Pies ──
+      const pieRows=PIE_DEFS.map(p=>{
+        const perDayVals=perDay.map(d=>d.stats.piesCounts[p.key]||0);
+        const max=Math.max(0,...perDayVals);
+        if(!max)return null;
+        return [safe('Pie '+p.label,30), ...perDayVals.map(n=>n||'—'), max];
+      }).filter(Boolean);
+      maxTable('Pie de micro', pieRows);
+
+      // ── Mangueras ──
+      const allMang=new Set();
+      perDay.forEach(d=>Object.keys(d.stats.mangueraCountByLetter||{}).forEach(l=>allMang.add(l)));
+      const mangRows=[...allMang].sort().map(letter=>{
+        const isFixed=(S.sbConfig?.fixedLines||[]).some(l=>l.sbLetter===letter);
+        const perDayVals=perDay.map(d=>d.stats.mangueraCountByLetter?.[letter]||0);
+        const max=Math.max(0,...perDayVals);
+        return ['Manguera '+letter+(isFixed?' (fija)':''), ...perDayVals.map(n=>n||'—'), max];
+      }).filter(r=>r[r.length-1]>0);
+      maxTable('Manguera', mangRows);
+
+      // ── Cables de link ──
+      const allCab=new Set();
+      perDay.forEach(d=>Object.keys(d.stats.linkCablesByLetter||{}).forEach(l=>allCab.add(l)));
+      const cabRows=[...allCab].sort().map(letter=>{
+        const perDayVals=perDay.map(d=>d.stats.linkCablesByLetter?.[letter]||0);
+        const max=Math.max(0,...perDayVals);
+        return ['Cable link — Manguera '+letter, ...perDayVals.map(n=>n||'—'), max];
+      }).filter(r=>r[r.length-1]>0);
+      maxTable('Cable de link', cabRows);
+
+      // ── Cajetines (con total por día — el máximo diario es lo que hay que llevar) ──
+      const allCaj=new Set();
+      perDay.forEach(d=>Object.keys(d.stats.cajetinesByLetter||{}).forEach(l=>allCaj.add(l)));
+      const cajRows=[...allCaj].sort().map(letter=>{
+        const isFixed=(S.sbConfig?.fixedLines||[]).some(l=>l.sbLetter===letter);
+        const perDayVals=perDay.map(d=>d.stats.cajetinesByLetter?.[letter]||0);
+        const max=Math.max(0,...perDayVals);
+        return ['Cajetines Manguera '+letter+(isFixed?' (fija)':''), ...perDayVals.map(n=>n||'—'), max];
+      }).filter(r=>r[r.length-1]>0);
+      if(cajRows.length){
+        const dayTotals=perDay.map(d=>Object.values(d.stats.cajetinesByLetter||{}).reduce((s,n)=>s+n,0));
+        cajRows.push(['TOTAL cajetines / día', ...dayTotals.map(n=>n||'—'), Math.max(0,...dayTotals)]);
+      }
+      maxTable('Cajetín', cajRows);
+
+      addFooter(pdf,'Máximo Festival',210,297);
+    }
     else if(sec.id==='loadout'){
       pdf.addPage([210,297],'p'); // portrait — checklist format
       pdf.setFillColor(...BG); pdf.rect(0,0,210,297,'F');
@@ -11499,6 +11641,10 @@ function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/<
 <!-- BACK TO TOP -->
 <button id="back-to-top" onclick="document.getElementById('main-scroll').scrollTo({top:0,behavior:'smooth'})"
   style="display:none;position:fixed;bottom:24px;right:20px;z-index:9000;width:38px;height:38px;border-radius:50%;background:var(--accent);color:white;border:none;font-size:16px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.4);transition:opacity .2s" title="Volver arriba">↑</button>
+
+<!-- PRINT CURRENT SECTION -->
+<button id="print-section-btn" onclick="printCurrentSection()"
+  style="display:none;position:fixed;bottom:70px;right:20px;z-index:9000;width:38px;height:38px;border-radius:50%;background:var(--bg3);color:var(--text2);border:1px solid var(--border2);font-size:15px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.4);transition:opacity .2s" title="Exportar solo esta sección a PDF">🖨</button>
 
 <!-- TOUR MODAL -->
 <div class="pdf-modal-overlay" id="tour-modal">
