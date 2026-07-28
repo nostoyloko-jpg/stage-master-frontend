@@ -4589,7 +4589,12 @@ function renderSummary(){
 
   const tC=artists.reduce((s,a)=>s+a.canales,0);
   const tM=artists.reduce((s,a)=>s+a.channels.filter(c=>c.micro&&!isLineInput(c.micro)&&!c.premontado&&!isMicroPropio(c.micro)).length,0);
-  const tD=artists.reduce((s,a)=>s+a.channels.filter(c=>c.di).length,0);
+  // Una DI estéreo enlazada L/R es una sola caja física — no se cuenta dos veces.
+  const tD=artists.reduce((s,a)=>s+a.channels.filter((c,i)=>{
+    if(!c.di)return false;
+    if(c.di==='ST' && c.diLink==='prev' && a.channels[i-1]?.diLink==='next' && a.channels[i-1]?.di==='ST') return false;
+    return true;
+  }).length,0);
   const tP=artists.reduce((s,a)=>s+a.channels.reduce((ss,c)=>ss+PIE_DEFS.filter(p=>c.pies?.[p.key]).length,0),0);
   document.getElementById('summary-stats').innerHTML=[[t('totalCanales'),tC],[t('totalMicros'),tM],[t('totalDIs'),tD],[t('totalPies'),tP],[t('artistas'),artists.length]]
     .map(([l,v])=>`<div class="stat-card"><div class="stat-label">${l}</div><div class="stat-value">${v}</div></div>`).join('');
@@ -5245,7 +5250,18 @@ function computeLoadStats(artists){
   reuseArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{reuseMics[k]=Math.max(reuseMics[k]||0,n);});});
   Object.entries(reuseMics).forEach(([k,n])=>{micCount[k]=(micCount[k]||0)+n;});
 
-  function countDi(a,type){return a.channels.filter(ch=>ch.di===type).length;}
+  // Una DI estéreo es UNA caja física que atiende los dos canales del par L/R. Si los dos
+  // canales están enlazados entre sí, se cuenta una sola vez (se ignora el canal "seguidor"
+  // del par). Un canal ST suelto, sin pareja enlazada, cuenta 1 por sí mismo.
+  function countDi(a,type){
+    if(type!=="ST") return a.channels.filter(ch=>ch.di===type).length;
+    return a.channels.filter((ch,i)=>{
+      if(ch.di!=="ST")return false;
+      // Skip the bottom half of a mutual L/R link — its box is the one already counted above.
+      if(ch.diLink==='prev' && a.channels[i-1]?.diLink==='next' && a.channels[i-1]?.di==='ST') return false;
+      return true;
+    }).length;
+  }
   const diM=fixedArt.reduce((s,a)=>s+countDi(a,"M"),0)+Math.max(0,...reuseArt.map(a=>countDi(a,"M")),0);
   const diST=fixedArt.reduce((s,a)=>s+countDi(a,"ST"),0)+Math.max(0,...reuseArt.map(a=>countDi(a,"ST")),0);
 
