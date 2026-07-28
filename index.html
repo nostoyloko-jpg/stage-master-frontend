@@ -1788,15 +1788,8 @@ function getCajetinesTotal(letter){
     return v&&!isNaN(parseInt(v));
   });
   if(fixedLine){
-    // Cajetines de manguera fija: por artista según reutilizable/no reutilizable (no por set).
-    const qty=fixedLine.quantity||1;
-    let cajSum=0,cajMax=0;
-    S.artists.forEach(a=>{
-      if(!usesLetter(a))return;
-      if(a.reutilizable) cajMax=Math.max(cajMax,qty);
-      else cajSum+=qty;
-    });
-    return cajSum+cajMax;
+    // Línea fija: se monta una sola vez para todo el festival.
+    return S.artists.some(usesLetter) ? (fixedLine.quantity||1) : 0;
   }
   const fixedArt=S.artists.filter(a=>!a.reutilizable&&usesLetter(a));
   const reuseArt=S.artists.filter(a=>a.reutilizable&&usesLetter(a));
@@ -1814,13 +1807,7 @@ function getLinkCablesTotal(letter){
   if(fixedLine){
     const qty=fixedLine.quantity||1;
     if(qty<2)return 0;
-    let cabSum=0,cabMax=0;
-    S.artists.forEach(a=>{
-      if(!usesLetter(a))return;
-      if(a.reutilizable) cabMax=Math.max(cabMax,qty-1);
-      else cabSum+=qty-1;
-    });
-    return cabSum+cabMax;
+    return S.artists.some(usesLetter) ? (qty-1) : 0;
   }
   const fixedArt=S.artists.filter(a=>!a.reutilizable&&usesLetter(a));
   const reuseArt=S.artists.filter(a=>a.reutilizable&&usesLetter(a));
@@ -4451,17 +4438,21 @@ function computeSummaryFor(artists){
       systemsByLetter[letter]=usedSystems;
     }
 
-    // Cajetines per artist: fixed lines use the fixed quantity, variables use sbCajetines.
     const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
-    const cajFor=a=>fixedLine
-      ? (fixedLine.quantity||1)
-      : Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
-    const nonReuse=artistsUsing.filter(a=>!a.reutilizable);
-    const reuse=artistsUsing.filter(a=>a.reutilizable);
-    cajetinesByLetter[letter]=nonReuse.reduce((s,a)=>s+cajFor(a),0)+Math.max(0,...reuse.map(cajFor));
-    const cabFor=a=>Math.max(0,cajFor(a)-1);
-    const cabTotal=nonReuse.reduce((s,a)=>s+cabFor(a),0)+Math.max(0,...reuse.map(cabFor));
-    if(cabTotal>0) linkCablesByLetter[letter]=cabTotal;
+    if(fixedLine){
+      // Línea fija: su juego de cajetines y cables se monta una sola vez para todo el festival.
+      const qty=fixedLine.quantity||1;
+      cajetinesByLetter[letter]=qty;
+      if(qty>1) linkCablesByLetter[letter]=qty-1;
+    } else {
+      const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
+      const nonReuse=artistsUsing.filter(a=>!a.reutilizable);
+      const reuse=artistsUsing.filter(a=>a.reutilizable);
+      cajetinesByLetter[letter]=nonReuse.reduce((s,a)=>s+cajFor(a),0)+Math.max(0,...reuse.map(cajFor));
+      const cabFor=a=>Math.max(0,cajFor(a)-1);
+      const cabTotal=nonReuse.reduce((s,a)=>s+cabFor(a),0)+Math.max(0,...reuse.map(cabFor));
+      if(cabTotal>0) linkCablesByLetter[letter]=cabTotal;
+    }
   });
   return {micCounts,piesCounts,mangueraCountByLetter,cajetinesByLetter,linkCablesByLetter,systemsByLetter};
 }
@@ -4773,10 +4764,11 @@ function renderSummary(){
           const fl=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
           const cabFor=a=>{
             if(!usesLetter(a))return 0;
-            const q=fl?(fl.quantity||1):Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
+            if(fl)return '·'; // línea fija: juego único compartido, no por banda
+            const q=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
             return Math.max(0,q-1);
           };
-          const cells=artists.map(a=>`<td class="${cabFor(a)?'':'zero'}" style="text-align:center">${cabFor(a)||'—'}</td>`).join('');
+          const cells=artists.map(a=>{const v=cabFor(a);return `<td class="${v?'':'zero'}" style="text-align:center">${v||'—'}</td>`;}).join('');
           return `<tr><td class="left">${dot}Cable link — Manguera ${letter}</td>${cells}<td class="tcol">${n}</td></tr>`;
         }).filter(Boolean).join('');
         const cabGrand=Object.values(_cabStats).reduce((s,n)=>s+n,0);
@@ -4796,15 +4788,12 @@ function renderSummary(){
       const isFixed=fixedLetters.has(letter);
       let counts,total;
       if(isFixed){
+        // Línea fija: un solo juego para todo el festival, se comparte entre todas las bandas.
         const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
         const qty=fixedLine?(fixedLine.quantity||1):1;
-        let cajSum=0,cajMax=0;
-        counts=artists.map(a=>{
-          if(!usesLetter(a))return 0;
-          if(a.reutilizable){cajMax=Math.max(cajMax,qty);return qty;}
-          cajSum+=qty;return qty;
-        });
-        total=cajSum+cajMax;
+        const anyUse=artists.some(usesLetter);
+        counts=artists.map(a=>usesLetter(a)?'·':0); // "·" = comparte el juego fijo
+        total=anyUse?qty:0;
       } else {
         const nonReuse=artists.filter(a=>!a.reutilizable&&usesLetter(a));
         const reuse=artists.filter(a=>a.reutilizable&&usesLetter(a));
@@ -5321,21 +5310,10 @@ function computeLoadStats(artists){
         sbCount[letter]=1;
         const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
         const qty=fixedLine?(fixedLine.quantity||1):1;
-        // Cajetines: cajas físicas por banda (regla reutilizable/no reutilizable).
-        let cajSum=0,cajMax=0;
-        artistsUsing.forEach(a=>{
-          if(a.reutilizable) cajMax=Math.max(cajMax,qty);
-          else cajSum+=qty;
-        });
-        cajetinesByLetter[letter]=cajSum+cajMax;
-        if(qty>1){
-          let cabSum=0,cabMax=0;
-          artistsUsing.forEach(a=>{
-            if(a.reutilizable) cabMax=Math.max(cabMax,qty-1);
-            else cabSum+=qty-1;
-          });
-          if(cabSum+cabMax>0) linkCablesByLetter[letter]=cabSum+cabMax;
-        }
+        // Los cajetines y cables de una línea fija se montan UNA sola vez para todo el
+        // festival, igual que su manguera — no se multiplican por banda ni por sistema.
+        cajetinesByLetter[letter]=qty;
+        if(qty>1) linkCablesByLetter[letter]=qty-1;
       }
     } else {
       // Manguera VARIABLE: compartida dentro de cada sistema → 1 por sistema que la use.
