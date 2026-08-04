@@ -818,6 +818,10 @@ self.addEventListener('fetch',e=>e.respondWith(
         <button class="file-dropdown-item" onclick="cmdSaveDrive()">
           <span class="fi">▲</span><span>Guardar en Drive</span>
         </button>
+        <hr class="file-dropdown-sep">
+        <button class="file-dropdown-item" onclick="cmdExportByDay()" title="Genera un archivo por día, solo con los artistas de esa fecha">
+          <span class="fi">📅</span><span>Exportar por día...</span>
+        </button>
       </div>
     </div>
     <span class="file-name-bar" id="file-name-bar"><span class="unsaved-dot" id="unsaved-dot"></span><span id="file-name-text">sin título</span></span>
@@ -8103,6 +8107,73 @@ function downloadJSON(name){
   document.body.appendChild(a);a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// Exporta un proyecto por día: mismo evento y configuración, pero solo con los artistas de
+// esa fecha. Sirve para trabajar rápido con un archivo ligero en festivales grandes.
+function cmdExportByDay(){
+  closeFileMenu();
+  const days=groupArtistsByDate();
+  if(!days.length){alert('No hay artistas que exportar.');return;}
+  if(days.length===1){
+    if(!confirm('Solo hay un día en este proyecto. ¿Exportarlo igualmente?'))return;
+  }
+
+  const overlay=document.createElement('div');
+  overlay.className='pdf-modal-overlay';
+  overlay.style.display='flex';
+  overlay.innerHTML=`
+    <div class="pdf-modal">
+      <div class="pdf-modal-head">
+        <span class="pdf-modal-title">EXPORTAR POR DÍA</span>
+        <button class="btn-icon" onclick="this.closest('.pdf-modal-overlay').remove()" style="font-size:12px">✕</button>
+      </div>
+      <div class="pdf-modal-body">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:10px">
+          Cada archivo lleva el evento y la configuración completos, pero solo los artistas del día elegido.
+        </div>
+        ${days.map((d,i)=>`
+          <label style="display:flex;align-items:center;gap:10px;padding:7px 0;cursor:pointer;border-bottom:1px solid var(--border)">
+            <input type="checkbox" class="expday-cb" value="${i}" checked style="accent-color:var(--accent);width:16px;height:16px;cursor:pointer">
+            <span style="flex:1">
+              <b style="font-size:12px">${esc(d.label)}</b>
+              <div style="font-size:10px;color:var(--text3);margin-top:1px">${d.artists.length} artista(s): ${esc(d.artists.map(a=>a.nombre).join(', ').slice(0,70))}</div>
+            </span>
+          </label>`).join('')}
+      </div>
+      <div class="pdf-modal-foot">
+        <button class="btn" onclick="this.closest('.pdf-modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-accent" id="expday-go">Exportar seleccionados</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#expday-go').onclick=()=>{
+    const picked=[...overlay.querySelectorAll('.expday-cb')].filter(cb=>cb.checked).map(cb=>days[parseInt(cb.value)]);
+    if(!picked.length){alert('Selecciona al menos un día.');return;}
+    overlay.remove();
+    const base=(S.event.nombre||'CH_List').replace(/[^a-zA-Z0-9_\-\s]/g,'').trim()||'CH_List';
+    picked.forEach((d,idx)=>{
+      // Copia profunda del estado con solo los artistas de ese día.
+      const sub=JSON.parse(JSON.stringify(S));
+      sub.artists=JSON.parse(JSON.stringify(d.artists));
+      // Ajusta el rango de fechas del evento a ese día concreto.
+      const dateKey=(d.key==='__nodate__')?'':d.key;
+      if(dateKey){ sub.event.fechaInicio=dateKey; sub.event.fechaFin=dateKey; }
+      const safeLabel=String(d.label).replace(/[^a-zA-Z0-9_\-]/g,'-');
+      const fname=`${base}_${safeLabel}`;
+      // Escalona las descargas: algunos navegadores descartan varias simultáneas.
+      setTimeout(()=>{
+        const blob=new Blob([JSON.stringify(sub,null,2)],{type:'application/json'});
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a');
+        a.href=url;a.download=fname+'.json';
+        document.body.appendChild(a);a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, idx*350);
+    });
+  };
 }
 
 function closeModal(id){
