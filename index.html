@@ -1062,9 +1062,9 @@ self.addEventListener('fetch',e=>e.respondWith(
       <div style="overflow-x:auto">
         <table class="lineup-table" id="lineup-show-table" style="width:100%;table-layout:fixed">
           <colgroup>
-            <col style="width:2%"><col style="width:3%"><col style="width:18%">
-            <col style="width:15%"><col style="width:9%"><col style="width:9%">
-            <col style="width:7%"><col><col style="width:3%">
+            <col style="width:2%"><col style="width:3%"><col style="width:16%">
+            <col style="width:13%"><col style="width:8%"><col style="width:8%">
+            <col style="width:6%"><col style="width:12%"><col style="width:4%"><col><col style="width:3%">
           </colgroup>
           <thead><tr>
             <th></th>
@@ -1074,6 +1074,8 @@ self.addEventListener('fetch',e=>e.respondWith(
             <th style="background:rgba(233,69,96,0.1)">Inicio</th>
             <th style="background:rgba(233,69,96,0.1)">Fin</th>
             <th>Canales</th>
+            <th>Escenario</th>
+            <th title="Color en el cronograma">Color</th>
             <th>Notas / Sistema</th>
             <th></th>
           </tr></thead>
@@ -1733,6 +1735,14 @@ function migrateState(data){
   return out;
 }
 
+// Color del artista en el cronograma: el elegido en Configuración, o el de la paleta por
+// posición si no ha elegido ninguno.
+function artistColor(a){
+  if(a&&a.color)return a.color;
+  const i=S.artists.indexOf(a);
+  return ARTIST_COLORS[(i<0?0:i)%ARTIST_COLORS.length];
+}
+
 function migrateA(a){
   if(!a.id)    a.id=Date.now()+Math.random();
   if(!a.nombre)a.nombre='';
@@ -1750,6 +1760,8 @@ function migrateA(a){
   if(a.soundcheckFin===undefined)a.soundcheckFin='';
   if(!a.sbCajetines||typeof a.sbCajetines!=='object')a.sbCajetines={};
   if(!a.sbCajetinesNames||typeof a.sbCajetinesNames!=='object')a.sbCajetinesNames={};
+  if(typeof a.escenario!=='string')a.escenario='';
+  if(typeof a.color!=='string'||!a.color)a.color='';
   if(typeof a.mangueraSet!=='string')a.mangueraSet='propio'; // 'propio' o id de un set compartido
   a.reutilizable=!!a.reutilizable; // material de este artista se recoge y reutiliza para otras bandas del mismo día
   if(!Array.isArray(a.channels))a.channels=[];
@@ -2324,6 +2336,8 @@ function renderLineup(){
       <td style="background:rgba(233,69,96,0.05)"><input type="text" value="${a.inicio||''}" placeholder="HH:MM" class="time-input" style="width:58px" oninput="updAF(${a.id},'inicio',this.value)"></td>
       <td style="background:rgba(233,69,96,0.05)"><input type="text" value="${a.fin||''}" placeholder="HH:MM" class="time-input" style="width:58px" oninput="updAF(${a.id},'fin',this.value)"></td>
       <td><input type="number" value="${a.canales||48}" min="1" max="128" style="width:50px;text-align:center" oninput="updACh(${a.id},this.value)"></td>
+      <td><input type="text" value="${esc(a.escenario||'')}" placeholder="Escenario" title="Nombre del escenario donde toca" oninput="updAF(${a.id},'escenario',this.value)" style="width:110px"></td>
+      <td style="text-align:center"><input type="color" value="${a.color||ARTIST_COLORS[i%ARTIST_COLORS.length]}" title="Color en el cronograma" oninput="updAF(${a.id},'color',this.value)" style="width:30px;height:26px;border-radius:4px;border:1px solid var(--border2);cursor:pointer;padding:1px"></td>
       <td><input type="text" value="${esc(a.notas||'')}" placeholder="Sistema, notas..." oninput="updAF(${a.id},'notas',this.value)" style="width:160px"></td>
       <td><button class="delete-btn" onclick="delA(${a.id})">✕</button></td>`;
     tbShow.appendChild(trShow);
@@ -3120,7 +3134,7 @@ function openSlotChannelPicker(sbLetter, slot, ev, artistId){
 
   // Channel list per artist — clean table style
   artists.forEach(a=>{
-    const color = ARTIST_COLORS[S.artists.indexOf(a)%ARTIST_COLORS.length];
+    const color = artistColor(a);
     if(!isFixed && current.length > 0 && current.some(e=>e.artistId===a.id)){
       // Variable box + already assigned — show anyway so user can change
     }
@@ -3433,7 +3447,7 @@ function buildLiveWindow(){
     const sf=adjO(si,t2a(f,isSC?a.soundcheckFin:a.fin));
     const callTime=isSC?(a.soundcheckCall||''):'';
     const notes=isSC?(a.soundcheckNotas||''):(a.notas||'');
-    return{si,sf,color:ARTIST_COLORS[S.artists.indexOf(a)%ARTIST_COLORS.length],name:a.nombre,notes,call:callTime};
+    return{si,sf,color:artistColor(a),name:a.nombre,notes,call:callTime};
   });
 
   const accent='#e94560',bg='#0d0f14',bg2='#0a0c10';
@@ -3776,10 +3790,10 @@ function pushLiveUpdate(){
   const day=isSC?_scDay:_tlDay;  let arr=isSC?S.artists.filter(a=>a.soundcheckInicio||a.soundcheckCall):S.artists.filter(a=>a.inicio||a.fin);
   if(day&&day!=='all')arr=arr.filter(a=>((isSC?a.soundcheckFecha:a.fecha)||a.fecha)===day);
   arr=arr.slice().sort((a,b)=>{const fa=isSC?(a.soundcheckFecha||a.fecha):a.fecha,fb=isSC?(b.soundcheckFecha||b.fecha):b.fecha;return(t2a(fa,isSC?a.soundcheckInicio:a.inicio)||0)-(t2a(fb,isSC?b.soundcheckInicio:b.inicio)||0);});
-  const allData=arr.map(a2=>{const f2=isSC?(a2.soundcheckFecha||a2.fecha):a2.fecha,si2=t2a(f2,isSC?a2.soundcheckInicio:a2.inicio),sf2=adjO(si2,t2a(f2,isSC?a2.soundcheckFin:a2.fin));return{si:si2,sf:sf2,color:ARTIST_COLORS[S.artists.indexOf(a2)%ARTIST_COLORS.length],name:a2.nombre,notes:isSC?(a2.soundcheckNotas||''):(a2.notas||''),call:isSC?(a2.soundcheckCall||''):''};});
+  const allData=arr.map(a2=>{const f2=isSC?(a2.soundcheckFecha||a2.fecha):a2.fecha,si2=t2a(f2,isSC?a2.soundcheckInicio:a2.inicio),sf2=adjO(si2,t2a(f2,isSC?a2.soundcheckFin:a2.fin));return{si:si2,sf:sf2,color:artistColor(a2),name:a2.nombre,notes:isSC?(a2.soundcheckNotas||''):(a2.notas||''),call:isSC?(a2.soundcheckCall||''):''};});
   const nm=new Date().getHours()*60+new Date().getMinutes()+new Date().getSeconds()/60;
   let cur=null,nxt=null;
-  for(let i=0;i<arr.length;i++){const a=arr[i],f=isSC?(a.soundcheckFecha||a.fecha):a.fecha,si=t2a(f,isSC?a.soundcheckInicio:a.inicio),sf=adjO(si,t2a(f,isSC?a.soundcheckFin:a.fin));if(si===null)continue;const sm=si%1440,em=sf?sf%1440:sm+60;if(nm>=sm&&nm<em){cur={si,sf,color:ARTIST_COLORS[S.artists.indexOf(a)%ARTIST_COLORS.length],name:a.nombre,notes:isSC?(a.soundcheckNotas||''):(a.notas||''),call:isSC?(a.soundcheckCall||''):''};if(i+1<arr.length){const a2=arr[i+1],f2=isSC?(a2.soundcheckFecha||a2.fecha):a2.fecha,si2=t2a(f2,isSC?a2.soundcheckInicio:a2.inicio),sf2=adjO(si2,t2a(f2,isSC?a2.soundcheckFin:a2.fin));nxt={si:si2,sf:sf2,color:ARTIST_COLORS[S.artists.indexOf(a2)%ARTIST_COLORS.length],name:a2.nombre,notes:isSC?(a2.soundcheckNotas||''):(a2.notas||''),call:isSC?(a2.soundcheckCall||''):''};}break;}else if(sm>nm&&!nxt){nxt={si,sf,color:ARTIST_COLORS[S.artists.indexOf(a)%ARTIST_COLORS.length],name:a.nombre,notes:isSC?(a.soundcheckNotas||''):(a.notas||''),call:isSC?(a.soundcheckCall||''):''};break;}}
+  for(let i=0;i<arr.length;i++){const a=arr[i],f=isSC?(a.soundcheckFecha||a.fecha):a.fecha,si=t2a(f,isSC?a.soundcheckInicio:a.inicio),sf=adjO(si,t2a(f,isSC?a.soundcheckFin:a.fin));if(si===null)continue;const sm=si%1440,em=sf?sf%1440:sm+60;if(nm>=sm&&nm<em){cur={si,sf,color:artistColor(a),name:a.nombre,notes:isSC?(a.soundcheckNotas||''):(a.notas||''),call:isSC?(a.soundcheckCall||''):''};if(i+1<arr.length){const a2=arr[i+1],f2=isSC?(a2.soundcheckFecha||a2.fecha):a2.fecha,si2=t2a(f2,isSC?a2.soundcheckInicio:a2.inicio),sf2=adjO(si2,t2a(f2,isSC?a2.soundcheckFin:a2.fin));nxt={si:si2,sf:sf2,color:artistColor(a2),name:a2.nombre,notes:isSC?(a2.soundcheckNotas||''):(a2.notas||''),call:isSC?(a2.soundcheckCall||''):''};}break;}else if(sm>nm&&!nxt){nxt={si,sf,color:artistColor(a),name:a.nombre,notes:isSC?(a.soundcheckNotas||''):(a.notas||''),call:isSC?(a.soundcheckCall||''):''};break;}}
   try{_liveWin.receiveUpdate(allData);}catch(e){}
 }
 
@@ -6974,7 +6988,15 @@ function applyTimelineView(){
 // ══════════════════════════════════════════════════════════════════════
 // TIMELINE DOM — unified Show + SC, day-aware, drag & resize
 // ══════════════════════════════════════════════════════════════════════
-const TL_PX_MIN=4, TL_ROW_H=80, TL_LABEL_W=160, TL_HDR_H=48;
+const TL_PX_MIN=4, TL_ROW_H=80, TL_LABEL_W=160;
+// Altura de la cabecera del cronograma (la franja con hora y fecha). Ajustable arrastrando
+// su borde inferior; se recuerda entre sesiones.
+const TL_HDR_H_MIN=32, TL_HDR_H_MAX=180;
+let TL_HDR_H=(()=>{try{const v=parseInt(localStorage.getItem('sm.tlHdrH'));return (v>=TL_HDR_H_MIN&&v<=TL_HDR_H_MAX)?v:48;}catch(e){return 48;}})();
+function setTlHdrH(px){
+  TL_HDR_H=Math.max(TL_HDR_H_MIN,Math.min(TL_HDR_H_MAX,Math.round(px)));
+  try{localStorage.setItem('sm.tlHdrH',String(TL_HDR_H));}catch(e){}
+}
 const COL_CO='#607d8b', COL_CALL='#607d8b';
 
 let _tlMode='show';          // 'show' | 'sc'  (for the Timeline card)
@@ -7109,6 +7131,25 @@ function renderTLView(containerId, mode, dayFilter, extraH=2){
   // ── Sticky header — pro two-row hour grid ──────────────────────────
   const hdr=document.createElement('div');
   hdr.style.cssText=`position:sticky;top:0;z-index:10;height:${TL_HDR_H}px;background:${BG2};border-bottom:1px solid ${BORD2};display:flex;box-sizing:border-box;`;
+  // Tirador para redimensionar la cabecera arrastrando su borde inferior.
+  const grip=document.createElement('div');
+  grip.title='Arrastra para ajustar la altura de la cabecera';
+  grip.style.cssText=`position:absolute;left:0;right:0;bottom:-3px;height:7px;cursor:ns-resize;z-index:12;`;
+  grip.onmousedown=(ev)=>{
+    ev.preventDefault();
+    const startY=ev.clientY, startH=TL_HDR_H;
+    const onMove=(e2)=>{ setTlHdrH(startH+(e2.clientY-startY)); hdr.style.height=TL_HDR_H+'px'; };
+    const onUp=()=>{
+      document.removeEventListener('mousemove',onMove);
+      document.removeEventListener('mouseup',onUp);
+      document.body.style.cursor='';
+      applyTimelineView(); // re-render con la nueva altura
+    };
+    document.addEventListener('mousemove',onMove);
+    document.addEventListener('mouseup',onUp);
+    document.body.style.cursor='ns-resize';
+  };
+  hdr.appendChild(grip);
 
   // Label column header
   const hdrSpacer=document.createElement('div');
@@ -7152,7 +7193,7 @@ function renderTLView(containerId, mode, dayFilter, extraH=2){
   // ── Artist rows ───────────────────────────────────────────────────
   artists.forEach((a,rowIdx)=>{
     const globalIdx=S.artists.indexOf(a);
-    const color=ARTIST_COLORS[globalIdx%ARTIST_COLORS.length];
+    const color=artistColor(a);
     const rowBg=BG3;  // uniform bg — blocks are the visual element, not rows
     const f=mode==='sc'?(a.soundcheckFecha||a.fecha):a.fecha;
 
@@ -7164,11 +7205,14 @@ function renderTLView(containerId, mode, dayFilter, extraH=2){
     const lbl=document.createElement('div');
     lbl.style.cssText=`position:sticky;left:0;z-index:5;width:${TL_LABEL_W}px;min-width:${TL_LABEL_W}px;flex-shrink:0;background:${BG3};border-right:1px solid ${BORD2};display:flex;align-items:center;padding:0 14px;gap:0;box-sizing:border-box;overflow:hidden;`;
     // Color bar on the left edge
+    const _times=[a.inicio,a.fin].filter(Boolean).join(' – ');
     lbl.innerHTML=`
       <div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:${color};border-radius:0 2px 2px 0;"></div>
       <div style="margin-left:10px;min-width:0;flex:1;display:flex;flex-direction:column;gap:2px">
         <div style="font-size:13px;font-weight:700;color:${TEXT};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;letter-spacing:.1px">${esc(a.nombre)}</div>
-        ${a.fecha?`<div style="font-size:10px;color:${TEXT3};letter-spacing:.5px;font-variant-numeric:tabular-nums">${fmtDate(a.fecha)}</div>`:''}
+        ${_times?`<div style="font-size:10px;color:${TEXT3};letter-spacing:.5px;font-variant-numeric:tabular-nums">${esc(_times)}</div>`:''}
+        ${a.escenario?`<div style="font-size:9px;color:${color};letter-spacing:.6px;text-transform:uppercase;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Escenario">${esc(a.escenario)}</div>`:''}
+        ${a.fecha?`<div style="font-size:9px;color:${TEXT3};letter-spacing:.5px;font-variant-numeric:tabular-nums;opacity:.75">${fmtDate(a.fecha)}</div>`:''}
       </div>`;
     row.appendChild(lbl);
 
@@ -7376,7 +7420,7 @@ window.addEventListener('mousemove',ev=>{
       // Upgrade to reorder mode
       _drag.type='tl-order';
       _drag.fromIdx=S.artists.indexOf(_drag.a);
-      _drag.ghost=makeDragGhost(_drag.a.nombre, ARTIST_COLORS[_drag.fromIdx%ARTIST_COLORS.length]);
+      _drag.ghost=makeDragGhost(_drag.a.nombre, artistColor(_drag.a));
       // Restore times to original
       const a=_drag.a;
       if(_drag.field==='show'){a.inicio=absToHHMM(_drag.origI);a.fin=absToHHMM(_drag.origF);}
