@@ -3524,11 +3524,14 @@ function buildLiveWindow(){
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:${bg};color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden;height:100vh;display:flex;flex-direction:column}
-#top{flex:0 0 var(--top-h,50vh);display:flex;align-items:stretch;gap:14px;padding:14px 2vw;background:${bg2};border-bottom:2px solid ${accent};min-height:90px;overflow:hidden}
-.tpanel{flex:1 1 0;min-width:0;display:flex;flex-direction:column;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:12px 16px;overflow:hidden}
+#top{flex:0 0 var(--top-h,50vh);display:flex;align-items:stretch;gap:0;padding:14px 2vw;background:${bg2};border-bottom:2px solid ${accent};min-height:90px;overflow:hidden}
+.tpanel{flex:1 1 0;min-width:120px;min-width:0;display:flex;flex-direction:column;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:12px 16px;overflow:hidden}
 .tpanel-h{font-size:min(1.5vw,2vh);letter-spacing:4px;font-weight:800;text-transform:uppercase;margin-bottom:8px;flex-shrink:0}
 .tpanel-b{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:8px;justify-content:center}
 .tempty{font-size:min(3vw,4vh);font-weight:900;color:rgba(255,255,255,.2)}
+.vsplit{flex:0 0 10px;cursor:col-resize;position:relative;transition:background .12s}
+.vsplit:hover,.vsplit.active{background:rgba(233,69,96,.5)}
+.vsplit::after{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:2px;height:28px;background:rgba(255,255,255,.2);border-radius:1px}
 .trow{border-left:4px solid var(--c,#888);padding-left:12px;min-width:0}
 .tname{font-size:min(3.2vw,4.4vh);font-weight:900;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tmeta{font-size:min(1.5vw,2vh);font-family:monospace;color:rgba(255,255,255,.55);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -3536,7 +3539,7 @@ body{background:${bg};color:#fff;font-family:-apple-system,BlinkMacSystemFont,'S
 .trem{font-size:min(1.6vw,2.1vh);font-family:monospace;font-weight:800;margin-top:3px}
 .tbar{height:4px;background:rgba(255,255,255,.1);border-radius:2px;margin-top:6px;overflow:hidden}
 .tbar>div{height:100%;border-radius:2px;transition:width 1s linear}
-#clkbox{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;padding-right:10px}
+#clkbox{flex:0 0 var(--w-clk,26%);min-width:150px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;padding-right:10px}
 #clk{font-size:min(8vw,13vh);font-weight:900;font-family:monospace;line-height:.9;letter-spacing:-2px}
 #dat{font-size:min(1.5vw,2vh);color:rgba(255,255,255,.35);letter-spacing:3px;text-transform:uppercase;margin-top:8px;font-weight:500;white-space:nowrap}
 #evn{font-size:min(1.6vw,2.1vh);font-weight:900;color:${accent};letter-spacing:2px;margin-top:8px;text-transform:uppercase;white-space:nowrap}
@@ -3568,10 +3571,12 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
     <div id="dat"></div>
     <div id="evn">${esc(evName)}</div>
   </div>
+  <div class="vsplit" data-vs="0" title="Arrastra para ajustar el ancho"></div>
   <div id="panel-now" class="tpanel">
     <div class="tpanel-h" style="color:${accent}">EN ESCENA</div>
     <div class="tpanel-b" id="now-list"><div class="tempty">—</div></div>
   </div>
+  <div class="vsplit" data-vs="1" title="Arrastra para ajustar el ancho"></div>
   <div id="panel-next" class="tpanel">
     <div class="tpanel-h" style="color:rgba(255,255,255,.4)">SIGUIENTE</div>
     <div class="tpanel-b" id="next-list"><div class="tempty">—</div></div>
@@ -3907,6 +3912,56 @@ function startResize(e){
 }
 
 // Arrastre vertical: al encoger el reloj caben más artistas
+// Anchos ajustables de las tres celdas superiores (reloj | en escena | siguiente)
+(function initTopCols(){
+  const clk=document.getElementById('clkbox');
+  const now=document.getElementById('panel-now');
+  const nxt=document.getElementById('panel-next');
+  if(!clk||!now||!nxt)return;
+  const saved=localStorage.getItem('smlive.topCols');
+  if(saved){try{
+    const w=JSON.parse(saved);
+    if(w.clk)clk.style.flex='0 0 '+w.clk+'px';
+    if(w.now)now.style.flex='0 0 '+w.now+'px';
+  }catch(e){}}
+  function save(){
+    try{localStorage.setItem('smlive.topCols',JSON.stringify({
+      clk:Math.round(clk.getBoundingClientRect().width),
+      now:Math.round(now.getBoundingClientRect().width)
+    }));}catch(e){}
+  }
+  document.querySelectorAll('.vsplit').forEach(sp=>{
+    sp.onmousedown=(e)=>{
+      e.preventDefault();
+      sp.classList.add('active');
+      const which=sp.dataset.vs; // '0' = reloj|en escena, '1' = en escena|siguiente
+      const left = which==='0' ? clk : now;
+      const right= which==='0' ? now : nxt;
+      const startX=e.clientX;
+      const lw=left.getBoundingClientRect().width;
+      const rw=right.getBoundingClientRect().width;
+      function onMove(ev){
+        const d=ev.clientX-startX;
+        const nl=Math.max(120,lw+d), nr=Math.max(120,rw-d);
+        if(nl<=120||nr<=120)return;
+        left.style.flex='0 0 '+nl+'px';
+        if(which==='1') right.style.flex='1 1 0';
+        else right.style.flex='0 0 '+nr+'px';
+      }
+      function onUp(){
+        sp.classList.remove('active');
+        document.removeEventListener('mousemove',onMove);
+        document.removeEventListener('mouseup',onUp);
+        document.body.style.cursor='';
+        save();
+      }
+      document.addEventListener('mousemove',onMove);
+      document.addEventListener('mouseup',onUp);
+      document.body.style.cursor='col-resize';
+    };
+  });
+})();
+
 (function initVSplit(){
   const sp=document.getElementById('hsplit');
   if(!sp)return;
@@ -7196,7 +7251,44 @@ function applyTimelineView(){
 // ══════════════════════════════════════════════════════════════════════
 // TIMELINE DOM — unified Show + SC, day-aware, drag & resize
 // ══════════════════════════════════════════════════════════════════════
-const TL_PX_MIN=4, TL_LABEL_W=160;
+const TL_LABEL_W=160;
+// Zoom del cronograma: píxeles por minuto. Más px/min = más zoom (menos tiempo en pantalla).
+// A 1400px de ancho útil: 0.8 ≈ 29h, 4 ≈ 6h, 20 ≈ 70min, 60 ≈ 23min.
+const TL_ZOOM_STEPS=[0.4,0.6,0.8,1.2,2,3,4,6,9,14,20,30,45,60];
+let _tlZoomIdx=(()=>{try{const v=parseInt(localStorage.getItem('sm.tlZoom'));return (v>=0&&v<TL_ZOOM_STEPS.length)?v:6;}catch(e){return 6;}})();
+let TL_PX_MIN=TL_ZOOM_STEPS[_tlZoomIdx];
+function setTlZoom(idx){
+  _tlZoomIdx=Math.max(0,Math.min(TL_ZOOM_STEPS.length-1,idx));
+  TL_PX_MIN=TL_ZOOM_STEPS[_tlZoomIdx];
+  try{localStorage.setItem('sm.tlZoom',String(_tlZoomIdx));}catch(e){}
+}
+// Minutos visibles con el zoom actual, para mostrarlo junto a los botones.
+function tlVisibleLabel(){
+  const wrap=document.getElementById('gantt-container');
+  const w=(wrap?wrap.clientWidth:1200)-TL_LABEL_W;
+  const mins=Math.max(1,Math.round(w/TL_PX_MIN));
+  if(mins<90) return mins+' min';
+  const h=Math.floor(mins/60), m=mins%60;
+  return h+'h'+(m?' '+m+'m':'');
+}
+// Mantiene centrado el instante que se estaba viendo al cambiar el zoom.
+function tlZoomBy(delta){
+  const wrap=document.getElementById('gantt-container');
+  let anchorRatio=0.5, timeAtCentre=null, prevPx=TL_PX_MIN;
+  if(wrap){
+    const view=wrap.clientWidth-TL_LABEL_W;
+    timeAtCentre=(wrap.scrollLeft+view*anchorRatio)/prevPx;
+  }
+  setTlZoom(_tlZoomIdx+delta);
+  applyTimelineView();
+  if(wrap&&timeAtCentre!==null){
+    requestAnimationFrame(()=>{
+      const view=wrap.clientWidth-TL_LABEL_W;
+      wrap.scrollLeft=Math.max(0, timeAtCentre*TL_PX_MIN - view*anchorRatio);
+      const z=document.getElementById('tl-zoom-lbl');if(z)z.textContent=tlVisibleLabel();
+    });
+  }
+}
 // Alto de cada fila del cronograma. Ajustable arrastrando el borde inferior de una fila.
 const TL_ROW_H_MIN=44, TL_ROW_H_MAX=220;
 let TL_ROW_H=(()=>{try{const v=parseInt(localStorage.getItem('sm.tlRowH'));return (v>=TL_ROW_H_MIN&&v<=TL_ROW_H_MAX)?v:80;}catch(e){return 80;}})();
@@ -7407,6 +7499,46 @@ function renderTLView(containerId, mode, dayFilter, extraH=2){
   hdr.appendChild(hdrTrack);
   wrap.appendChild(hdr);
 
+  // ── Ajuste del alto de fila por proximidad ──────────────────────────
+  // Un tirador dentro de cada fila queda tapado por la fila siguiente, así que la detección
+  // se hace en el contenedor: si el puntero está a menos de 5px del borde entre dos filas,
+  // el cursor cambia y se puede arrastrar para cambiar el alto de todas.
+  const EDGE=5;
+  function nearRowEdge(e){
+    const rows=[...wrap.querySelectorAll('[data-artist-idx]')];
+    if(!rows.length)return false;
+    for(const r of rows){
+      const b=r.getBoundingClientRect();
+      if(e.clientX>=b.left && e.clientX<=b.right && Math.abs(e.clientY-b.bottom)<=EDGE) return true;
+    }
+    return false;
+  }
+  wrap.addEventListener('mousemove',(e)=>{
+    if(wrap.dataset.rowResizing)return;
+    wrap.style.cursor = nearRowEdge(e) ? 'ns-resize' : '';
+  });
+  wrap.addEventListener('mousedown',(e)=>{
+    if(!nearRowEdge(e))return;
+    e.preventDefault();e.stopPropagation();
+    wrap.dataset.rowResizing='1';
+    wrap.style.cursor='ns-resize';
+    const startY=e.clientY,startH=TL_ROW_H;
+    const onMove=(e2)=>{
+      setTlRowH(startH+(e2.clientY-startY));
+      wrap.querySelectorAll('[data-artist-idx]').forEach(r=>{r.style.height=TL_ROW_H+'px';});
+    };
+    const onUp=()=>{
+      document.removeEventListener('mousemove',onMove);
+      document.removeEventListener('mouseup',onUp);
+      delete wrap.dataset.rowResizing;
+      wrap.style.cursor='';document.body.style.cursor='';
+      applyTimelineView();
+    };
+    document.addEventListener('mousemove',onMove);
+    document.addEventListener('mouseup',onUp);
+    document.body.style.cursor='ns-resize';
+  });
+
   // ── Artist rows ───────────────────────────────────────────────────
   artists.forEach((a,rowIdx)=>{
     const globalIdx=S.artists.indexOf(a);
@@ -7538,40 +7670,39 @@ function renderTLView(containerId, mode, dayFilter, extraH=2){
     }
 
     row.appendChild(track);
-    // Tirador para ajustar el alto de TODAS las filas: borde inferior, a todo el ancho.
-    const rowGrip=document.createElement('div');
-    rowGrip.title='Arrastra para ajustar el alto de las filas';
-    rowGrip.style.cssText='position:absolute;left:0;right:0;bottom:-4px;height:9px;cursor:ns-resize;z-index:40;background:transparent;transition:background .12s;';
-    rowGrip.onmouseenter=()=>{rowGrip.style.background='rgba(233,69,96,.45)';};
-    rowGrip.onmouseleave=()=>{if(!rowGrip.dataset.dragging)rowGrip.style.background='transparent';};
-    rowGrip.onmousedown=(ev)=>{
-      ev.preventDefault();ev.stopPropagation();
-      rowGrip.dataset.dragging='1';
-      rowGrip.style.background='rgba(233,69,96,.7)';
-      const startY=ev.clientY,startH=TL_ROW_H;
-      const onMove=(e2)=>{
-        setTlRowH(startH+(e2.clientY-startY));
-        // Redimensiona en vivo sin re-renderizar: mucho más fluido durante el arrastre.
-        wrap.querySelectorAll('[data-artist-idx]').forEach(r=>{r.style.height=TL_ROW_H+'px';});
-      };
-      const onUp=()=>{
-        document.removeEventListener('mousemove',onMove);
-        document.removeEventListener('mouseup',onUp);
-        document.body.style.cursor='';
-        delete rowGrip.dataset.dragging;
-        applyTimelineView(); // re-dibuja bloques y rejilla con el nuevo alto
-      };
-      document.addEventListener('mousemove',onMove);
-      document.addEventListener('mouseup',onUp);
-      document.body.style.cursor='ns-resize';
-    };
-    row.appendChild(rowGrip);
     wrap.appendChild(row);
   });
 
   el.dataset.minabs=minAbs;
   el.innerHTML='';
   el.appendChild(wrap);
+
+  // ── Controles de zoom (esquina inferior derecha del cronograma) ───
+  if(containerId==='gantt-container'){
+    const host=el.parentElement||el;      // el contenedor se vacía en cada render
+    host.style.position='relative';
+    const old=host.querySelector('#tl-zoom-ctl'); if(old)old.remove();
+    const zc=document.createElement('div');
+    zc.id='tl-zoom-ctl';
+    zc.style.cssText='position:absolute;right:10px;bottom:10px;z-index:60;display:inline-flex;align-items:center;gap:4px;background:var(--bg2);border:1px solid var(--border2);border-radius:8px;padding:4px 6px;box-shadow:0 2px 10px rgba(0,0,0,.45)';
+    const mk=(txt,title,fn,dis)=>{
+      const b=document.createElement('button');
+      b.textContent=txt;b.title=title;b.disabled=!!dis;
+      b.style.cssText='width:26px;height:26px;border-radius:5px;border:1px solid var(--border2);background:var(--bg3);color:var(--text);font-size:15px;font-weight:700;line-height:1;cursor:pointer;padding:0;opacity:'+(dis?'.35':'1');
+      b.onclick=(e)=>{e.stopPropagation();fn();};
+      return b;
+    };
+    zc.appendChild(mk('\u2212','Alejar (ver más tiempo)',()=>tlZoomBy(-1), _tlZoomIdx<=0));
+    const lab=document.createElement('span');
+    lab.id='tl-zoom-lbl';
+    lab.style.cssText='font-size:10px;color:var(--text2);min-width:52px;text-align:center;font-variant-numeric:tabular-nums;letter-spacing:.3px';
+    lab.textContent=tlVisibleLabel();
+    zc.appendChild(lab);
+    zc.appendChild(mk('+','Acercar (ver menos tiempo)',()=>tlZoomBy(1), _tlZoomIdx>=TL_ZOOM_STEPS.length-1));
+    host.appendChild(zc);
+    setTimeout(()=>{const l=document.getElementById('tl-zoom-lbl');if(l)l.textContent=tlVisibleLabel();},60);
+  }
+
 }
 
 function makeTLBlock(x,w,color,name,start,end,dur,textCol,muted){
