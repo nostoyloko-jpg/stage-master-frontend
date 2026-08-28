@@ -3536,7 +3536,7 @@ body{background:${bg};color:#fff;font-family:-apple-system,BlinkMacSystemFont,'S
 .trem{font-size:min(1.6vw,2.1vh);font-family:monospace;font-weight:800;margin-top:3px}
 .tbar{height:4px;background:rgba(255,255,255,.1);border-radius:2px;margin-top:6px;overflow:hidden}
 .tbar>div{height:100%;border-radius:2px;transition:width 1s linear}
-#clkbox{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;justify-content:center;padding-left:10px}
+#clkbox{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;padding-right:10px}
 #clk{font-size:min(8vw,13vh);font-weight:900;font-family:monospace;line-height:.9;letter-spacing:-2px}
 #dat{font-size:min(1.5vw,2vh);color:rgba(255,255,255,.35);letter-spacing:3px;text-transform:uppercase;margin-top:8px;font-weight:500;white-space:nowrap}
 #evn{font-size:min(1.6vw,2.1vh);font-weight:900;color:${accent};letter-spacing:2px;margin-top:8px;text-transform:uppercase;white-space:nowrap}
@@ -3563,6 +3563,11 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 <button id="close" onclick="window.close()">✕</button>
 
 <div id="top">
+  <div id="clkbox">
+    <div id="clk">00:00</div>
+    <div id="dat"></div>
+    <div id="evn">${esc(evName)}</div>
+  </div>
   <div id="panel-now" class="tpanel">
     <div class="tpanel-h" style="color:${accent}">EN ESCENA</div>
     <div class="tpanel-b" id="now-list"><div class="tempty">—</div></div>
@@ -3570,11 +3575,6 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
   <div id="panel-next" class="tpanel">
     <div class="tpanel-h" style="color:rgba(255,255,255,.4)">SIGUIENTE</div>
     <div class="tpanel-b" id="next-list"><div class="tempty">—</div></div>
-  </div>
-  <div id="clkbox">
-    <div id="clk">00:00</div>
-    <div id="dat"></div>
-    <div id="evn">${esc(evName)}</div>
   </div>
 </div>
 <div id="hsplit" title="Arrastra para ver más artistas"></div>
@@ -7416,24 +7416,6 @@ function renderTLView(containerId, mode, dayFilter, extraH=2){
 
     const row=document.createElement('div');
     row.style.cssText=`display:flex;height:${TL_ROW_H}px;border-bottom:1px solid ${hex2rgba(BORD2.replace(/[^,]+\)$/,'0.5)'))};background:${BG3};position:relative;`;
-    // Tirador para ajustar el alto de TODAS las filas arrastrando el borde inferior de una.
-    const rowGrip=document.createElement('div');
-    rowGrip.title='Arrastra para ajustar el alto de las filas';
-    rowGrip.style.cssText='position:absolute;left:0;width:'+TL_LABEL_W+'px;bottom:-3px;height:7px;cursor:ns-resize;z-index:11;';
-    rowGrip.onmousedown=(ev)=>{
-      ev.preventDefault();ev.stopPropagation();
-      const startY=ev.clientY,startH=TL_ROW_H;
-      const onMove=(e2)=>{ setTlRowH(startH+(e2.clientY-startY)); applyTimelineView(); };
-      const onUp=()=>{
-        document.removeEventListener('mousemove',onMove);
-        document.removeEventListener('mouseup',onUp);
-        document.body.style.cursor='';
-      };
-      document.addEventListener('mousemove',onMove);
-      document.addEventListener('mouseup',onUp);
-      document.body.style.cursor='ns-resize';
-    };
-    row.appendChild(rowGrip);
     row.dataset.artistIdx=globalIdx;
 
     // Sticky artist label — pro style
@@ -7556,6 +7538,34 @@ function renderTLView(containerId, mode, dayFilter, extraH=2){
     }
 
     row.appendChild(track);
+    // Tirador para ajustar el alto de TODAS las filas: borde inferior, a todo el ancho.
+    const rowGrip=document.createElement('div');
+    rowGrip.title='Arrastra para ajustar el alto de las filas';
+    rowGrip.style.cssText='position:absolute;left:0;right:0;bottom:-4px;height:9px;cursor:ns-resize;z-index:40;background:transparent;transition:background .12s;';
+    rowGrip.onmouseenter=()=>{rowGrip.style.background='rgba(233,69,96,.45)';};
+    rowGrip.onmouseleave=()=>{if(!rowGrip.dataset.dragging)rowGrip.style.background='transparent';};
+    rowGrip.onmousedown=(ev)=>{
+      ev.preventDefault();ev.stopPropagation();
+      rowGrip.dataset.dragging='1';
+      rowGrip.style.background='rgba(233,69,96,.7)';
+      const startY=ev.clientY,startH=TL_ROW_H;
+      const onMove=(e2)=>{
+        setTlRowH(startH+(e2.clientY-startY));
+        // Redimensiona en vivo sin re-renderizar: mucho más fluido durante el arrastre.
+        wrap.querySelectorAll('[data-artist-idx]').forEach(r=>{r.style.height=TL_ROW_H+'px';});
+      };
+      const onUp=()=>{
+        document.removeEventListener('mousemove',onMove);
+        document.removeEventListener('mouseup',onUp);
+        document.body.style.cursor='';
+        delete rowGrip.dataset.dragging;
+        applyTimelineView(); // re-dibuja bloques y rejilla con el nuevo alto
+      };
+      document.addEventListener('mousemove',onMove);
+      document.addEventListener('mouseup',onUp);
+      document.body.style.cursor='ns-resize';
+    };
+    row.appendChild(rowGrip);
     wrap.appendChild(row);
   });
 
