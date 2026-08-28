@@ -3549,6 +3549,9 @@ body{background:${bg};color:#fff;font-family:-apple-system,BlinkMacSystemFont,'S
 #hsplit::after{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:36px;height:2px;background:rgba(255,255,255,.25);border-radius:1px}
 .strip{flex:1;display:flex;align-items:stretch;min-height:0;overflow:hidden}
 .strip+.strip{border-top:1px solid rgba(255,255,255,.08)}
+.strip{position:relative}
+.striph{position:absolute;left:0;right:0;bottom:-4px;height:9px;cursor:ns-resize;z-index:50;transition:background .12s}
+.striph:hover,.striph.active{background:rgba(233,69,96,.5)}
 .info{width:var(--info-w,340px);min-width:120px;max-width:70vw;padding:0 36px;display:flex;flex-direction:column;justify-content:center;flex-shrink:0;overflow:hidden}
 .lbl{font-size:10px;letter-spacing:3px;text-transform:uppercase;font-weight:700;margin-bottom:7px}
 .aname{font-size:min(3.8vw,5vh);font-weight:900;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -3562,6 +3565,11 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 .drag-handle::after{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:2px;height:24px;background:rgba(255,255,255,.2);border-radius:1px}
 #close{position:fixed;top:14px;right:14px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:6px;color:rgba(255,255,255,.4);font-size:11px;padding:6px 12px;cursor:pointer;z-index:100;font-family:inherit;letter-spacing:1px}
 #close:hover{background:rgba(255,255,255,.14);color:#fff}
+#zoomctl{position:fixed;right:14px;bottom:14px;z-index:200;display:flex;align-items:center;gap:6px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.15);border-radius:9px;padding:5px 8px;backdrop-filter:blur(6px)}
+#zoomctl button{width:30px;height:30px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:#fff;font-size:17px;font-weight:800;line-height:1;cursor:pointer;padding:0}
+#zoomctl button:hover:not(:disabled){background:rgba(255,255,255,.18)}
+#zoomctl button:disabled{opacity:.3;cursor:default}
+#zlbl{font-size:11px;font-family:monospace;color:rgba(255,255,255,.7);min-width:52px;text-align:center}
 </style></head><body>
 <button id="close" onclick="window.close()">✕</button>
 
@@ -3584,9 +3592,28 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 </div>
 <div id="hsplit" title="Arrastra para ver más artistas"></div>
 <div id="bot"></div>
+<div id="zoomctl">
+  <button id="zmin" onclick="setZoom(1)" title="Acercar (ver menos tiempo)">+</button>
+  <span id="zlbl"></span>
+  <button id="zmax" onclick="setZoom(-1)" title="Alejar (ver más tiempo)">&minus;</button>
+</div>
 <scr${""}ipt>
 const ACCENT='${accent}';
-const VISIBLE=60; // minutes shown
+// Minutos visibles en las barras. Ajustable con los botones de zoom (esquina inf. derecha).
+const ZOOM_STEPS=[20,30,45,60,90,120,180,240,360];
+let _zIdx=(()=>{try{const v=parseInt(localStorage.getItem('smlive.zoom'));return (v>=0&&v<ZOOM_STEPS.length)?v:3;}catch(e){return 3;}})();
+let VISIBLE=ZOOM_STEPS[_zIdx];
+function zoomLbl(){const m=VISIBLE;return m<90?(m+' min'):(Math.floor(m/60)+'h'+(m%60?' '+(m%60)+'m':''));}
+function setZoom(d){
+  _zIdx=Math.max(0,Math.min(ZOOM_STEPS.length-1,_zIdx+d));
+  VISIBLE=ZOOM_STEPS[_zIdx];
+  try{localStorage.setItem('smlive.zoom',String(_zIdx));}catch(e){}
+  const l=document.getElementById('zlbl');if(l)l.textContent=zoomLbl();
+  const mi=document.getElementById('zmin'),ma=document.getElementById('zmax');
+  if(mi)mi.disabled=_zIdx>=ZOOM_STEPS.length-1;
+  if(ma)ma.disabled=_zIdx<=0;
+  requestAnimationFrame(redraw);
+}
 const NX=64;      // px from left where needle sits
 
 let BLOCKS=${JSON.stringify(blocksData)};
@@ -3752,8 +3779,16 @@ function setInfo(prefix,block){
   if(nm)nm.textContent=block.name.toUpperCase();
   // Time: show call first if available, then start–end
   const timeStr = fmtM(block.si)+'–'+fmtM(block.sf);
-  // El escenario acompaña al horario: en directo es lo primero que hay que saber.
-  if(tm)tm.textContent = block.stage ? (timeStr+'   ·   '+block.stage.toUpperCase()) : timeStr;
+  // El escenario acompaña al horario, en el color que tiene asignado. Se usa innerHTML
+  // porque textContent no puede llevar color propio en parte del texto.
+  if(tm){
+    if(block.stage){
+      const sc=block.stageColor||block.color||'#888';
+      tm.innerHTML=timeStr+'&nbsp;&nbsp;&middot;&nbsp;&nbsp;<span style="color:'+sc+';font-weight:800;letter-spacing:1px">'+block.stage.toUpperCase()+'</span>';
+    } else {
+      tm.textContent=timeStr;
+    }
+  }
   if(nt)nt.textContent=block.notes||'';
   // Call time — shown prominently in yellow above time
   const callVal = (block.call||'').trim();
@@ -3769,6 +3804,9 @@ let _lastCurName='', _lastNxtName='';
 // El número de artistas visibles depende del alto libre bajo el reloj: al arrastrar el
 // divisor hacia arriba cabe una barra más, y así sucesivamente según la pantalla.
 const STRIP_MIN_H=110; // alto mínimo legible de una barra
+// Alto individual de cada barra (índice → px). Vacío = reparto automático.
+let STRIP_H=(()=>{try{return JSON.parse(localStorage.getItem('smlive.stripH')||'{}');}catch(e){return {};}})();
+function saveStripH(){try{localStorage.setItem('smlive.stripH',JSON.stringify(STRIP_H));}catch(e){}}
 let _stripCount=0;
 
 function visibleCount(){
@@ -3795,9 +3833,47 @@ function buildStrips(n){
         '<div class="anotes" id="notes-'+i+'"></div>'+
       '</div>'+
       '<div class="drag-handle" onmousedown="startResize(event)" title="Arrastrar para cambiar ancho"></div>'+
-      '<div class="cvsw"><canvas id="cvs-'+i+'"></canvas></div>';
+      '<div class="cvsw"><canvas id="cvs-'+i+'"></canvas></div>'+
+      '<div class="striph" data-si="'+i+'" title="Arrastra para ajustar el alto de esta fila"></div>';
+    // Alto individual: si el usuario lo ha fijado, se respeta; si no, reparto equitativo.
+    const savedH=STRIP_H[i];
+    if(savedH){ s.style.flex='0 0 '+savedH+'px'; } else { s.style.flex='1 1 0'; }
     bot.appendChild(s);
   }
+  // Arrastre del borde inferior de cada barra para ajustar su alto por separado.
+  bot.querySelectorAll('.striph').forEach(h=>{
+    h.onmousedown=(e)=>{
+      e.preventDefault();e.stopPropagation();
+      h.classList.add('active');
+      const idx=parseInt(h.dataset.si);
+      const strip=h.parentElement;
+      const startY=e.clientY, startH=strip.getBoundingClientRect().height;
+      function onMove(ev){
+        const nh=Math.max(60,startH+(ev.clientY-startY));
+        strip.style.flex='0 0 '+nh+'px';
+        STRIP_H[idx]=Math.round(nh);
+        requestAnimationFrame(redraw);
+      }
+      function onUp(){
+        h.classList.remove('active');
+        document.removeEventListener('mousemove',onMove);
+        document.removeEventListener('mouseup',onUp);
+        document.body.style.cursor='';
+        saveStripH();requestAnimationFrame(redraw);
+      }
+      document.addEventListener('mousemove',onMove);
+      document.addEventListener('mouseup',onUp);
+      document.body.style.cursor='ns-resize';
+    };
+    // Doble clic: vuelve al reparto automático de esa barra.
+    h.ondblclick=(e)=>{
+      e.preventDefault();e.stopPropagation();
+      const idx=parseInt(h.dataset.si);
+      delete STRIP_H[idx];saveStripH();
+      h.parentElement.style.flex='1 1 0';
+      requestAnimationFrame(redraw);
+    };
+  });
   _stripCount=n;
 }
 
@@ -3995,6 +4071,7 @@ function redraw(){
   const{list}=pickBlocks(nowMinsInt,_stripCount||visibleCount());
   list.forEach((b,i)=>drawStrip('cvs-'+i,b,nowMins));
 }
+setZoom(0);
 setInterval(tick,1000);
 tick();
 window.addEventListener('resize',()=>requestAnimationFrame(tick));
