@@ -3574,7 +3574,10 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 #zoomctl button:disabled{opacity:.3;cursor:default}
 #zlbl{font-size:11px;font-family:monospace;color:rgba(255,255,255,.7);min-width:52px;text-align:center}
 @keyframes callblink{0%,100%{opacity:1}50%{opacity:.25}}
-#panel-call .trow{animation:callblink 1.1s ease-in-out infinite}
+#panel-call .trow{animation:callblink 1.1s ease-in-out infinite;display:flex;align-items:center;gap:10px}
+#panel-call .callmain{flex:1;min-width:0}
+.callok{flex:0 0 auto;align-self:center;padding:8px 14px;border-radius:7px;border:1px solid rgba(255,179,71,.55);background:rgba(255,179,71,.16);color:#ffb347;font-size:min(1.3vw,1.8vh);font-weight:900;letter-spacing:1px;cursor:pointer;animation:none}
+.callok:hover{background:#ffb347;color:#111}
 #panel-call.hot{border-color:rgba(255,179,71,.6);box-shadow:0 0 0 1px rgba(255,179,71,.25) inset}
 </style></head><body>
 <button id="close" onclick="window.close()">✕</button>
@@ -3628,6 +3631,13 @@ function setZoom(d){
 const NX=64;      // px from left where needle sits
 
 let BLOCKS=${JSON.stringify(blocksData)};
+const CALL_DONE=new Set();
+function callKey(b){ return b.name+'@'+b.si; }
+function dismissCall(k){ CALL_DONE.add(k); requestAnimationFrame(()=>tick()); }
+document.addEventListener('click',function(e){
+  const btn=e.target.closest && e.target.closest('.callok');
+  if(btn && btn.dataset.ck) dismissCall(btn.dataset.ck);
+});
 const CALL_MINS=${JSON.stringify(S.event.callMins||15)};
 
 // "Ahora" en la MISMA escala absoluta que block.si/sf (minutos desde 2000-01-01).
@@ -3904,8 +3914,8 @@ function pickBlocks(nowMinsInt,n){
 
 function tick(){
   const now=new Date();
-  const nowMinsInt=now.getHours()*60+now.getMinutes();
-  const nowMins=nowAbs(); // absoluto, misma escala que block.si/sf
+  const nowMins=nowAbs();          // absoluto, misma escala que block.si/sf
+  const nowMinsInt=Math.floor(nowMins);
   document.getElementById('clk').textContent=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
   document.getElementById('dat').textContent=now.toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'}).toUpperCase();
 
@@ -3968,10 +3978,13 @@ function renderTopPanels(nowMinsInt){
   // ── CALL: artistas cuyo show empieza dentro de la ventana de aviso ──
   // Aparecen parpadeando, con nombre y escenario en el color del escenario. Si no hay
   // ninguno en ese margen, la celda queda vacía.
+  // El filtro es por margen restante, no por un instante exacto: si abres la ventana
+  // cuando ya quedan 5 min y el call está en 10, el aviso sigue apareciendo.
   const callList=BLOCKS.filter(b=>{
     if(b.si===null||b.si===undefined)return false;
     const falta=b.si-nowMinsInt;
-    return falta>0 && falta<=CALL_MINS;
+    if(!(falta>0 && falta<=CALL_MINS))return false;
+    return !CALL_DONE.has(callKey(b)); // ya se le ha hecho el call
   }).sort((a,b)=>a.si-b.si);
   const callEl=document.getElementById('call-list');
   const callPanel=document.getElementById('panel-call');
@@ -3980,10 +3993,13 @@ function renderTopPanels(nowMinsInt){
       callEl.innerHTML=callList.map(b=>{
         const col=b.stageColor||b.color||'#ffb347';
         const falta=Math.max(0,Math.round(b.si-nowMinsInt));
-        return '<div class="trow" style="--c:'+col+'">'
-          + '<div class="tname" style="color:'+col+'">'+b.name.toUpperCase()+'</div>'
-          + (b.stage?'<div class="tmeta"><span class="tstage" style="color:'+col+'">'+b.stage.toUpperCase()+'</span></div>':'')
-          + '<div class="trem" style="color:'+col+'">en '+falta+' min &middot; '+fmtM(b.si)+'</div>'
+        return '<div class="trow callrow" style="--c:'+col+'">'
+          + '<div class="callmain">'
+            + '<div class="tname" style="color:'+col+'">'+b.name.toUpperCase()+'</div>'
+            + (b.stage?'<div class="tmeta"><span class="tstage" style="color:'+col+'">'+b.stage.toUpperCase()+'</span></div>':'')
+            + '<div class="trem" style="color:'+col+'">en '+falta+' min &middot; '+fmtM(b.si)+'</div>'
+          + '</div>'
+          + '<button class="callok" data-ck="'+callKey(b).replace(/"/g,'&quot;')+'" title="Marcar como avisado">OK</button>'
           + '</div>';
       }).join('');
     } else {
