@@ -3618,6 +3618,14 @@ const NX=64;      // px from left where needle sits
 
 let BLOCKS=${JSON.stringify(blocksData)};
 
+// "Ahora" en la MISMA escala absoluta que block.si/sf (minutos desde 2000-01-01).
+// Sin esto, un show de madrugada (01:50 de mañana) se colapsaba a "hora del día" y acababa
+// dibujándose dentro de la ventana de hoy.
+function nowAbs(){
+  const d=new Date();
+  const days=Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate())-new Date(2000,0,1))/864e5);
+  return days*1440 + d.getHours()*60 + d.getMinutes() + d.getSeconds()/60;
+}
 function fmtM(m){const hh=Math.floor(((m%1440)+1440)%1440/60),mm=((m%60)+60)%60;return String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0');}
 
 // Find cur/nxt from BLOCKS given nowMins
@@ -3626,10 +3634,9 @@ function findCurNxt(nowMins){
   for(let i=0;i<BLOCKS.length;i++){
     const b=BLOCKS[i];
     if(b.si===null)continue;
-    const sm=((b.si%1440)+1440)%1440;
-    const em=b.sf?((b.sf%1440)+1440)%1440:sm+60;
-    // handle overnight: if em < sm, event crosses midnight
-    const active = em>sm ? (nowMins>=sm&&nowMins<em) : (nowMins>=sm||nowMins<em);
+    // Absolutos: el cruce de medianoche ya viene resuelto en si/sf.
+    const sm=b.si, em=(b.sf!=null?b.sf:sm+60);
+    const active = nowMins>=sm && nowMins<em;
     if(active){cur=b;if(i+1<BLOCKS.length)nxt=BLOCKS[i+1];break;}
     else if(sm>nowMins&&!nxt){nxt=b;}
   }
@@ -3661,29 +3668,24 @@ function drawStrip(cvId, block, nowMins){
 
   // xOf: time-of-day minutes → pixel x
   // leftMins = nowMins - NX/pxM, so xOf(nowMins) = NX ✓
-  function xOf(tod){
-    let diff = tod - leftMins;
-    if(diff >  720) diff -= 1440;
-    if(diff < -720) diff += 1440;
-    return diff * pxM;  // no NX offset — already baked into leftMins
+  function xOf(absM){
+    return (absM - leftMins) * pxM; // NX ya está incorporado en leftMins
   }
 
   // Normalise block si/sf to time-of-day (0-1439)
-  function toTOD(absM){ return absM===null?null:((absM%1440)+1440)%1440; }
 
   // --- Grid lines + time labels every 5 min ---
   // Iterate over time-of-day range visible on screen
   const startM = Math.ceil(leftMins/5)*5;
   for(let mi=startM; mi<=leftMins+VISIBLE+5; mi+=5){
-    const tod = ((mi%1440)+1440)%1440; // wrap to display time
-    const x = xOf(tod);
+    const x = xOf(mi);
     if(x<-2||x>W+2) continue;
     const i60=mi%60===0, i30=mi%30===0, i15=mi%15===0, i10=mi%10===0;
     ctx.strokeStyle=i60?'rgba(255,255,255,.35)':i30?'rgba(255,255,255,.18)':i15?'rgba(255,255,255,.08)':'rgba(255,255,255,.03)';
     ctx.lineWidth=i60?2:i30?1.2:0.8;
     ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
     if(i10){
-      const lbl=fmtM(tod);
+      const lbl=fmtM(mi);
       ctx.fillStyle=i60?'#fff':i30?'rgba(255,255,255,.75)':'rgba(255,255,255,.45)';
       ctx.font=(i60?'bold 16px':i30?'bold 13px':'11px')+' monospace';
       ctx.fillText(lbl, x+5, i60?22:i30?18:14);
@@ -3694,8 +3696,8 @@ function drawStrip(cvId, block, nowMins){
   if(block&&block.call){
     const callParts=block.call.split(':').map(Number);
     if(callParts.length===2&&!isNaN(callParts[0])){
-      const callTOD=callParts[0]*60+callParts[1];
-      const cx=xOf(callTOD);
+      const dayStart=Math.floor(block.si/1440)*1440;
+      const cx=xOf(dayStart+callParts[0]*60+callParts[1]);
       if(cx>0&&cx<W){
         ctx.strokeStyle='rgba(255,179,71,0.6)';
         ctx.lineWidth=1.5;
@@ -3711,10 +3713,8 @@ function drawStrip(cvId, block, nowMins){
 
   // --- Draw the SINGLE block for this strip ---
   if(block&&block.si!==null&&block.sf!==null){
-    const si_tod = toTOD(block.si);
-    const sf_tod = toTOD(block.sf);
-    const x1=xOf(si_tod);
-    const x2=xOf(sf_tod);
+    const x1=xOf(block.si);
+    const x2=xOf(block.sf);
     const bh=H*0.52, by=(H-bh)/2;
     const bx=x1, bw=x2-x1;
 
@@ -3741,7 +3741,7 @@ function drawStrip(cvId, block, nowMins){
 
     // Duration label above block (right side)
     if(block.si&&block.sf){
-      const dur=Math.round(((toTOD(block.sf))-(toTOD(block.si))+1440)%1440);
+      const dur=Math.max(0,Math.round(block.sf-block.si));
       const rx=Math.min(W-6,x2-2);
       ctx.fillStyle='rgba(255,255,255,.35)';
       ctx.font='11px monospace';
@@ -3893,7 +3893,7 @@ function pickBlocks(nowMinsInt,n){
 function tick(){
   const now=new Date();
   const nowMinsInt=now.getHours()*60+now.getMinutes();
-  const nowMins=nowMinsInt+now.getSeconds()/60;
+  const nowMins=nowAbs(); // absoluto, misma escala que block.si/sf
   document.getElementById('clk').textContent=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
   document.getElementById('dat').textContent=now.toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'}).toUpperCase();
 
@@ -3918,16 +3918,13 @@ function renderTopPanels(nowMinsInt){
   const playing=[], upcoming=[];
   BLOCKS.forEach(b=>{
     if(b.si===null||b.si===undefined)return;
-    const s=((b.si%1440)+1440)%1440;
-    const e=b.sf?((b.sf%1440)+1440)%1440:s+60;
-    const spans = e<s; // cruza medianoche
-    const isNow = spans ? (nowMinsInt>=s||nowMinsInt<e) : (nowMinsInt>=s&&nowMinsInt<e);
-    if(isNow) playing.push(b);
-    else if(!spans && s>nowMinsInt) upcoming.push(b);
+    const s=b.si, e=(b.sf!=null?b.sf:s+60); // absolutos: el cruce de medianoche ya está resuelto
+    if(nowMinsInt>=s && nowMinsInt<e) playing.push(b);
+    else if(s>nowMinsInt) upcoming.push(b);
   });
   // El "siguiente" de cada escenario: el más próximo por escenario, y si no hay
   // escenarios definidos, simplemente los próximos por hora.
-  upcoming.sort((a,b)=>(((a.si%1440)+1440)%1440)-(((b.si%1440)+1440)%1440));
+  upcoming.sort((a,b)=>a.si-b.si);
   const seen=new Set(), nextList=[];
   upcoming.forEach(b=>{
     const key=b.stage||'__none__';
@@ -3937,13 +3934,13 @@ function renderTopPanels(nowMinsInt){
 
   function rowHtml(b,withRemaining){
     const col=b.stageColor||b.color||'#888';
-    const s=((b.si%1440)+1440)%1440, e=b.sf?((b.sf%1440)+1440)%1440:s+60;
+    const s=b.si, e=(b.sf!=null?b.sf:s+60);
     const times=fmtM(b.si)+'–'+fmtM(b.sf);
     const stage=b.stage?('<span class="tstage" style="color:'+col+'">'+b.stage.toUpperCase()+'</span>'):'';
     let extra='';
     if(withRemaining){
-      const span=(e<s)?(e+1440-s):(e-s);
-      const done=(nowMinsInt>=s)?(nowMinsInt-s):(nowMinsInt+1440-s);
+      const span=Math.max(1,e-s);
+      const done=Math.max(0,nowMinsInt-s);
       const pct=Math.max(0,Math.min(100, span>0?(done/span*100):0));
       const rem=Math.max(0,Math.round(span-done));
       extra='<div class="trem" style="color:'+col+'">'+(rem>0?rem+' min restantes':'Finalizado')+'</div>'
@@ -4066,7 +4063,7 @@ function startResize(e){
 })();
 
 function redraw(){
-  const nowMins=new Date().getHours()*60+new Date().getMinutes()+new Date().getSeconds()/60;
+  const nowMins=nowAbs();
   const nowMinsInt=Math.floor(nowMins);
   const{list}=pickBlocks(nowMinsInt,_stripCount||visibleCount());
   list.forEach((b,i)=>drawStrip('cvs-'+i,b,nowMins));
