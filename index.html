@@ -923,6 +923,7 @@ self.addEventListener('fetch',e=>e.respondWith(
 
           <div class="field-group"><div class="field-label" id="lbl-fecha-inicio">Fecha inicio</div><input type="date" id="cfg-fecha-inicio" oninput="updCfg()"></div>
           <div class="field-group"><div class="field-label" id="lbl-fecha-fin">Fecha fin</div><input type="date" id="cfg-fecha-fin" oninput="updCfg()"></div>
+          <div class="field-group" style="flex:0 0 auto"><div class="field-label" title="Los shows que empiezan antes de esta hora se cuentan como del día anterior">Cambio de día</div><input type="time" id="cfg-day-cutoff" value="06:00" oninput="updCfg()" style="width:100px"></div>
           <div class="field-group"><div class="field-label">Realizado por</div><input type="text" id="cfg-tecnico" placeholder="Técnico de sonido" oninput="updCfg()"></div>
           <div class="field-group" style="margin-top:16px;padding:12px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:var(--radius)">
             <div class="field-label" style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
@@ -1652,7 +1653,7 @@ const SB_LETTERS=['A','B','C','D','E','F','G','H'];
 
 // ── STATE ──
 let S={
-  event:{nombre:'',lugar:'',recinto:'',recintoLat:null,recintoLng:null,fechaInicio:'',fechaFin:'',tecnico:'',version:'v1'},
+  event:{nombre:'',lugar:'',recinto:'',recintoLat:null,recintoLng:null,fechaInicio:'',fechaFin:'',tecnico:'',dayCutoff:'06:00',version:'v1'},
   artists:[],micros:[],// objects: {nombre,tipo,patron,phantom}
   micLocked:false,
   sbConfig:{rows:2,cols:8,fixedLines:[]}, // fixedLines: [{letter:'A',slots:16},{letter:'B',slots:16}]
@@ -2052,6 +2053,7 @@ function renderConfig(){
   if(S.event.recintoLat)showRecintoMiniMap(S.event.recintoLat,S.event.recintoLng,S.event.recinto||S.event.lugar);
   set('cfg-fecha-inicio',S.event.fechaInicio||S.event.fecha||'');
   set('cfg-fecha-fin',S.event.fechaFin||'');
+  set('cfg-day-cutoff',S.event.dayCutoff||'06:00');
   set('cfg-tecnico',S.event.tecnico||'');
   set('cfg-version',S.event.version||'');
   set('cfg-nsb',S.subboxes.length);
@@ -2067,6 +2069,7 @@ function updCfg(){
   if(curPage==='orden'){renderEventInfo();}
   const fi=document.getElementById('cfg-fecha-inicio');if(fi)S.event.fechaInicio=fi.value;
   const ff=document.getElementById('cfg-fecha-fin');if(ff)S.event.fechaFin=ff.value;
+  const dc=document.getElementById('cfg-day-cutoff');if(dc)S.event.dayCutoff=dc.value||'06:00';
   S.event.tecnico=document.getElementById('cfg-tecnico').value;
   S.event.version=document.getElementById('cfg-version').value;
   updSBInfo();saveS();
@@ -3434,7 +3437,7 @@ function buildLiveWindow(){
   function getSorted(){
     const day=isSC?_scDay:_tlDay;
     let arr=isSC?S.artists.filter(a=>a.soundcheckInicio||a.soundcheckCall):S.artists.filter(a=>a.inicio||a.fin);
-    if(day&&day!=='all')arr=arr.filter(a=>((isSC?a.soundcheckFecha:a.fecha)||a.fecha)===day);
+    if(day&&day!=='all')arr=arr.filter(a=>festivalDateOf(a,isSC)===day);
     return arr.slice().sort((a,b)=>{const fa=isSC?(a.soundcheckFecha||a.fecha):a.fecha,fb=isSC?(b.soundcheckFecha||b.fecha):b.fecha;return(t2a(fa,isSC?a.soundcheckInicio:a.inicio)||0)-(t2a(fb,isSC?b.soundcheckInicio:b.inicio)||0);});
   }
 
@@ -3849,7 +3852,7 @@ function pushLiveUpdate(){
   if(!_liveWin||_liveWin.closed||!_liveWin.receiveUpdate)return;
   const isSC=_liveWinMode==='sc';
   const day=isSC?_scDay:_tlDay;  let arr=isSC?S.artists.filter(a=>a.soundcheckInicio||a.soundcheckCall):S.artists.filter(a=>a.inicio||a.fin);
-  if(day&&day!=='all')arr=arr.filter(a=>((isSC?a.soundcheckFecha:a.fecha)||a.fecha)===day);
+  if(day&&day!=='all')arr=arr.filter(a=>festivalDateOf(a,isSC)===day);
   arr=arr.slice().sort((a,b)=>{const fa=isSC?(a.soundcheckFecha||a.fecha):a.fecha,fb=isSC?(b.soundcheckFecha||b.fecha):b.fecha;return(t2a(fa,isSC?a.soundcheckInicio:a.inicio)||0)-(t2a(fb,isSC?b.soundcheckInicio:b.inicio)||0);});
   const allData=arr.map(a2=>{const f2=isSC?(a2.soundcheckFecha||a2.fecha):a2.fecha,si2=t2a(f2,isSC?a2.soundcheckInicio:a2.inicio),sf2=adjO(si2,t2a(f2,isSC?a2.soundcheckFin:a2.fin));return{si:si2,sf:sf2,color:artistColor(a2),name:a2.nombre,notes:isSC?(a2.soundcheckNotas||''):(a2.notas||''),call:isSC?(a2.soundcheckCall||''):'',stage:a2.escenario||''};});
   const nm=new Date().getHours()*60+new Date().getMinutes()+new Date().getSeconds()/60;
@@ -5508,11 +5511,37 @@ function buildLoadRows(stats){
   return rows;
 }
 
-// Group artists by their date; artists with no date land in a "Sin fecha" bucket.
+// Hora de cambio de día del festival, en minutos desde medianoche. Un show que empieza antes
+// de esa hora pertenece a la jornada del día anterior (p.ej. un DJ a las 02:00 del domingo
+// sigue siendo "sábado" para el festival).
+function dayCutoffMins(){
+  const v=(S.event?.dayCutoff||'06:00').split(':');
+  const h=parseInt(v[0]),m=parseInt(v[1]);
+  if(isNaN(h))return 360;
+  return h*60+(isNaN(m)?0:m);
+}
+// Devuelve la fecha de FESTIVAL de un artista, aplicando la hora de cambio de día.
+function festivalDateOf(a, useSoundcheck){
+  const fecha=(useSoundcheck?(a.soundcheckFecha||a.fecha):a.fecha)||'';
+  const hora  =(useSoundcheck? a.soundcheckInicio : a.inicio)||'';
+  if(!fecha)return '';
+  const hm=hora.split(':');
+  const mins=(parseInt(hm[0])||0)*60+(parseInt(hm[1])||0);
+  if(!hora || mins>=dayCutoffMins()) return fecha;
+  // Empieza de madrugada → cuenta como el día anterior.
+  const [y,mo,d]=fecha.split('-').map(Number);
+  if(!y)return fecha;
+  const dt=new Date(y,mo-1,d);
+  dt.setDate(dt.getDate()-1);
+  const p=n=>String(n).padStart(2,'0');
+  return `${dt.getFullYear()}-${p(dt.getMonth()+1)}-${p(dt.getDate())}`;
+}
+
+// Group artists by their FESTIVAL date (see festivalDateOf); no date → "Sin fecha".
 function groupArtistsByDate(){
   const map={}; // dateKey -> [artists]
   S.artists.forEach(a=>{
-    const k=(a.fecha||'').trim()||'__nodate__';
+    const k=festivalDateOf(a,false).trim()||'__nodate__';
     if(!map[k])map[k]=[];
     map[k].push(a);
   });
@@ -7080,9 +7109,11 @@ function absToHHMM(abs){
 
 // Get unique dates for a set of artists in show or sc mode
 function getDays(mode){
+  // Usa la fecha de FESTIVAL (con la hora de cambio de día aplicada), así un show de
+  // madrugada no crea un día extra en la barra.
   const s=new Set();
   S.artists.forEach(a=>{
-    const d=mode==='sc'?(a.soundcheckFecha||a.fecha):a.fecha;
+    const d=festivalDateOf(a, mode==='sc');
     if(d)s.add(d);
   });
   return [...s].sort();
@@ -7726,7 +7757,7 @@ const _origSetTLDay=setTLDay;
 function renderTLTable(){
   const t2=document.getElementById('orden-timeline');if(!t2)return;
   let artists=S.artists.filter(a=>a.inicio||a.fin);
-  if(_tlDay!=='all') artists=artists.filter(a=>a.fecha===_tlDay);
+  if(_tlDay!=='all') artists=artists.filter(a=>festivalDateOf(a,false)===_tlDay);
   t2.innerHTML=artists.map((a,i)=>{
     const dur=calcDur(a.inicio,a.fin);
     const next=S.artists[S.artists.indexOf(a)+1];
@@ -8113,7 +8144,7 @@ function cmdNew(){
 function confirmNew(){
   closeModal('modal-new');
   S={
-    event:{nombre:'',lugar:'',recinto:'',recintoLat:null,recintoLng:null,fechaInicio:'',fechaFin:'',tecnico:'',version:'v1'},
+    event:{nombre:'',lugar:'',recinto:'',recintoLat:null,recintoLng:null,fechaInicio:'',fechaFin:'',tecnico:'',dayCutoff:'06:00',version:'v1'},
     artists:[],micros:S.micros,
     micLocked:false,
     sbConfig:{rows:2,cols:8,fixedLines:[]},
@@ -8344,7 +8375,7 @@ function clearAppDataConfirm(){
   currentFileName = null;
   // 3. Reset project state to blank
   S = {
-    event:{nombre:'',lugar:'',recinto:'',recintoLat:null,recintoLng:null,fechaInicio:'',fechaFin:'',tecnico:'',version:'v1'},
+    event:{nombre:'',lugar:'',recinto:'',recintoLat:null,recintoLng:null,fechaInicio:'',fechaFin:'',tecnico:'',dayCutoff:'06:00',version:'v1'},
     artists:[], micros:[], micLocked:false,
     sbConfig:{rows:2,cols:8,fixedLines:[]},
     subboxes:[
