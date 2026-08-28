@@ -3447,7 +3447,7 @@ function buildLiveWindow(){
     const sf=adjO(si,t2a(f,isSC?a.soundcheckFin:a.fin));
     const callTime=isSC?(a.soundcheckCall||''):'';
     const notes=isSC?(a.soundcheckNotas||''):(a.notas||'');
-    return{si,sf,color:artistColor(a),name:a.nombre,notes,call:callTime};
+    return{si,sf,color:artistColor(a),name:a.nombre,notes,call:callTime,stage:a.escenario||''};
   });
 
   const accent='#e94560',bg='#0d0f14',bg2='#0a0c10';
@@ -3458,8 +3458,11 @@ function buildLiveWindow(){
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:${bg};color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden;height:100vh;display:flex;flex-direction:column}
-#top{flex:0 0 50vh;display:flex;align-items:center;justify-content:space-between;padding:0 6vw;background:${bg2};border-bottom:2px solid ${accent}}
-#bot{flex:0 0 50vh;display:flex;flex-direction:column}
+#top{flex:0 0 var(--top-h,50vh);display:flex;align-items:center;justify-content:space-between;padding:0 6vw;background:${bg2};border-bottom:2px solid ${accent};min-height:90px;overflow:hidden}
+#bot{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+#hsplit{height:9px;flex-shrink:0;cursor:ns-resize;background:rgba(255,255,255,.05);position:relative;transition:background .15s}
+#hsplit:hover,#hsplit.active{background:rgba(233,69,96,.5)}
+#hsplit::after{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:36px;height:2px;background:rgba(255,255,255,.25);border-radius:1px}
 .strip{flex:1;display:flex;align-items:stretch;min-height:0;overflow:hidden}
 .strip+.strip{border-top:1px solid rgba(255,255,255,.08)}
 .info{width:var(--info-w,340px);min-width:120px;max-width:70vw;padding:0 36px;display:flex;flex-direction:column;justify-content:center;flex-shrink:0;overflow:hidden}
@@ -3492,30 +3495,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
     <div id="plbl" style="font-size:min(2.4vw,2.8vh);color:rgba(255,255,255,.5);font-family:monospace;font-weight:600"></div>
   </div>
 </div>
-<div id="bot">
-  <div class="strip">
-    <div class="info">
-      <div class="lbl" style="color:${accent}" id="lbl-cur">AHORA</div>
-      <div class="aname" id="name-cur">—</div>
-      <div class="acall" id="call-cur"></div>
-      <div class="atime" id="time-cur"></div>
-      <div class="anotes" id="notes-cur"></div>
-    </div>
-    <div class="drag-handle" onmousedown="startResize(event)" title="Arrastrar para cambiar ancho"></div>
-    <div class="cvsw"><canvas id="cvs-cur"></canvas></div>
-  </div>
-  <div class="strip">
-    <div class="info">
-      <div class="lbl" style="color:rgba(255,255,255,.3)" id="lbl-nxt">SIGUIENTE</div>
-      <div class="aname" id="name-nxt">—</div>
-      <div class="acall" id="call-nxt"></div>
-      <div class="atime" id="time-nxt"></div>
-      <div class="anotes" id="notes-nxt"></div>
-    </div>
-    <div class="drag-handle" onmousedown="startResize(event)" title="Arrastrar para cambiar ancho"></div>
-    <div class="cvsw"><canvas id="cvs-nxt"></canvas></div>
-  </div>
-</div>
+<div id="hsplit" title="Arrastra para ver más artistas"></div>
+<div id="bot"></div>
 <scr${""}ipt>
 const ACCENT='${accent}';
 const VISIBLE=60; // minutes shown
@@ -3684,7 +3665,8 @@ function setInfo(prefix,block){
   if(nm)nm.textContent=block.name.toUpperCase();
   // Time: show call first if available, then start–end
   const timeStr = fmtM(block.si)+'–'+fmtM(block.sf);
-  if(tm)tm.textContent=timeStr;
+  // El escenario acompaña al horario: en directo es lo primero que hay que saber.
+  if(tm)tm.textContent = block.stage ? (timeStr+'   ·   '+block.stage.toUpperCase()) : timeStr;
   if(nt)nt.textContent=block.notes||'';
   // Call time — shown prominently in yellow above time
   const callVal = (block.call||'').trim();
@@ -3696,41 +3678,92 @@ function setInfo(prefix,block){
 
 let _lastCurName='', _lastNxtName='';
 
+// ── Strips dinámicas ────────────────────────────────────────────────
+// El número de artistas visibles depende del alto libre bajo el reloj: al arrastrar el
+// divisor hacia arriba cabe una barra más, y así sucesivamente según la pantalla.
+const STRIP_MIN_H=110; // alto mínimo legible de una barra
+let _stripCount=0;
+
+function visibleCount(){
+  const bot=document.getElementById('bot');
+  const h=bot?bot.clientHeight:0;
+  return Math.max(1, Math.floor(h/STRIP_MIN_H));
+}
+
+function buildStrips(n){
+  const bot=document.getElementById('bot');
+  if(!bot)return;
+  bot.innerHTML='';
+  for(let i=0;i<n;i++){
+    const s=document.createElement('div');
+    s.className='strip';
+    const label = i===0 ? 'AHORA' : (i===1 ? 'SIGUIENTE' : 'EN '+(i)+'º LUGAR');
+    const col   = i===0 ? ACCENT : 'rgba(255,255,255,.3)';
+    s.innerHTML=
+      '<div class="info">'+
+        '<div class="lbl" style="color:'+col+'" id="lbl-'+i+'">'+label+'</div>'+
+        '<div class="aname" id="name-'+i+'">—</div>'+
+        '<div class="acall" id="call-'+i+'"></div>'+
+        '<div class="atime" id="time-'+i+'"></div>'+
+        '<div class="anotes" id="notes-'+i+'"></div>'+
+      '</div>'+
+      '<div class="drag-handle" onmousedown="startResize(event)" title="Arrastrar para cambiar ancho"></div>'+
+      '<div class="cvsw"><canvas id="cvs-'+i+'"></canvas></div>';
+    bot.appendChild(s);
+  }
+  _stripCount=n;
+}
+
+// Devuelve los N bloques a mostrar: el actual (o el próximo si no hay ninguno sonando)
+// y los que le siguen en orden.
+function pickBlocks(nowMinsInt,n){
+  const{cur,nxt}=findCurNxt(nowMinsInt);
+  const startRef = cur || nxt;
+  let startIdx = startRef ? BLOCKS.indexOf(startRef) : -1;
+  const out=[];
+  for(let i=0;i<n;i++){
+    out.push(startIdx>=0 && startIdx+i<BLOCKS.length ? BLOCKS[startIdx+i] : null);
+  }
+  return {list:out, playing: !!cur};
+}
+
 function tick(){
   const now=new Date();
-  // Use integer minutes for stable findCurNxt — fractional seconds only for canvas position
   const nowMinsInt=now.getHours()*60+now.getMinutes();
-  const nowMins=nowMinsInt+now.getSeconds()/60; // fractional for smooth needle
+  const nowMins=nowMinsInt+now.getSeconds()/60;
   document.getElementById('clk').textContent=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
   document.getElementById('dat').textContent=now.toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'}).toUpperCase();
 
-  const{cur,nxt}=findCurNxt(nowMinsInt);
+  const n=visibleCount();
+  if(n!==_stripCount) buildStrips(n);
 
-  // Only update info panel when cur/nxt actually changes (avoid flicker)
-  const curName=cur?cur.name:'';
-  const nxtName=nxt?nxt.name:'';
-  if(curName!==_lastCurName){setInfo('cur',cur);_lastCurName=curName;}
-  if(nxtName!==_lastNxtName){setInfo('nxt',nxt);_lastNxtName=nxtName;}
+  const{list,playing}=pickBlocks(nowMinsInt,n);
+  list.forEach((b,i)=>{
+    setInfo(i,b);
+    const lbl=document.getElementById('lbl-'+i);
+    if(lbl) lbl.textContent = (i===0 && !playing) ? 'SIGUIENTE' : (i===0?'AHORA':(i===1?'SIGUIENTE':'EN '+i+'º LUGAR'));
+    drawStrip('cvs-'+i,b,nowMins);
+  });
 
-  // Progress bar
+  // Progress bar del que está sonando
+  const cur=playing?list[0]:null;
+  const p=document.getElementById('prog'),pl=document.getElementById('plbl');
   if(cur){
     const s=((cur.si%1440)+1440)%1440, e=((cur.sf%1440)+1440)%1440;
     const pct=Math.max(0,Math.min(100,(nowMinsInt-s)/(e-s)*100));
     const rem=Math.max(0,Math.round(e-nowMinsInt));
-    const p=document.getElementById('prog'),pl=document.getElementById('plbl');
     if(p)p.style.width=pct+'%';
     if(pl)pl.textContent=rem>0?rem+' min restantes':'Finalizado';
+  } else {
+    if(p)p.style.width='0%';
+    if(pl)pl.textContent='';
   }
-
-  drawStrip('cvs-cur',cur,nowMins);
-  drawStrip('cvs-nxt',nxt,nowMins);
 }
 
-// Receive live data updates from parent
 window.receiveUpdate=function(blocks){BLOCKS=blocks;tick();};
 window.tickFromParent=function(){tick();};
 
-// Drag-to-resize info panel
+// Arrastre horizontal: ancho del panel de info
 function startResize(e){
   e.preventDefault();
   const handle=e.currentTarget;
@@ -3752,11 +3785,39 @@ function startResize(e){
   document.addEventListener('mouseup',onUp);
 }
 
+// Arrastre vertical: al encoger el reloj caben más artistas
+(function initVSplit(){
+  const sp=document.getElementById('hsplit');
+  if(!sp)return;
+  const saved=parseInt(localStorage.getItem('smlive.topH'));
+  if(saved>=90) document.documentElement.style.setProperty('--top-h',saved+'px');
+  sp.onmousedown=function(e){
+    e.preventDefault();
+    sp.classList.add('active');
+    const top=document.getElementById('top');
+    const startY=e.clientY, startH=top.getBoundingClientRect().height;
+    function onMove(ev){
+      const h=Math.max(90,Math.min(window.innerHeight-STRIP_MIN_H-20,startH+(ev.clientY-startY)));
+      document.documentElement.style.setProperty('--top-h',h+'px');
+      try{localStorage.setItem('smlive.topH',String(Math.round(h)));}catch(err){}
+      requestAnimationFrame(tick);
+    }
+    function onUp(){
+      sp.classList.remove('active');
+      document.removeEventListener('mousemove',onMove);
+      document.removeEventListener('mouseup',onUp);
+      requestAnimationFrame(tick);
+    }
+    document.addEventListener('mousemove',onMove);
+    document.addEventListener('mouseup',onUp);
+  };
+})();
+
 function redraw(){
   const nowMins=new Date().getHours()*60+new Date().getMinutes()+new Date().getSeconds()/60;
-  const{cur,nxt}=findCurNxt(nowMins);
-  drawStrip('cvs-cur',cur,nowMins);
-  drawStrip('cvs-nxt',nxt,nowMins);
+  const nowMinsInt=Math.floor(nowMins);
+  const{list}=pickBlocks(nowMinsInt,_stripCount||visibleCount());
+  list.forEach((b,i)=>drawStrip('cvs-'+i,b,nowMins));
 }
 setInterval(tick,1000);
 tick();
@@ -3790,10 +3851,10 @@ function pushLiveUpdate(){
   const day=isSC?_scDay:_tlDay;  let arr=isSC?S.artists.filter(a=>a.soundcheckInicio||a.soundcheckCall):S.artists.filter(a=>a.inicio||a.fin);
   if(day&&day!=='all')arr=arr.filter(a=>((isSC?a.soundcheckFecha:a.fecha)||a.fecha)===day);
   arr=arr.slice().sort((a,b)=>{const fa=isSC?(a.soundcheckFecha||a.fecha):a.fecha,fb=isSC?(b.soundcheckFecha||b.fecha):b.fecha;return(t2a(fa,isSC?a.soundcheckInicio:a.inicio)||0)-(t2a(fb,isSC?b.soundcheckInicio:b.inicio)||0);});
-  const allData=arr.map(a2=>{const f2=isSC?(a2.soundcheckFecha||a2.fecha):a2.fecha,si2=t2a(f2,isSC?a2.soundcheckInicio:a2.inicio),sf2=adjO(si2,t2a(f2,isSC?a2.soundcheckFin:a2.fin));return{si:si2,sf:sf2,color:artistColor(a2),name:a2.nombre,notes:isSC?(a2.soundcheckNotas||''):(a2.notas||''),call:isSC?(a2.soundcheckCall||''):''};});
+  const allData=arr.map(a2=>{const f2=isSC?(a2.soundcheckFecha||a2.fecha):a2.fecha,si2=t2a(f2,isSC?a2.soundcheckInicio:a2.inicio),sf2=adjO(si2,t2a(f2,isSC?a2.soundcheckFin:a2.fin));return{si:si2,sf:sf2,color:artistColor(a2),name:a2.nombre,notes:isSC?(a2.soundcheckNotas||''):(a2.notas||''),call:isSC?(a2.soundcheckCall||''):'',stage:a2.escenario||''};});
   const nm=new Date().getHours()*60+new Date().getMinutes()+new Date().getSeconds()/60;
   let cur=null,nxt=null;
-  for(let i=0;i<arr.length;i++){const a=arr[i],f=isSC?(a.soundcheckFecha||a.fecha):a.fecha,si=t2a(f,isSC?a.soundcheckInicio:a.inicio),sf=adjO(si,t2a(f,isSC?a.soundcheckFin:a.fin));if(si===null)continue;const sm=si%1440,em=sf?sf%1440:sm+60;if(nm>=sm&&nm<em){cur={si,sf,color:artistColor(a),name:a.nombre,notes:isSC?(a.soundcheckNotas||''):(a.notas||''),call:isSC?(a.soundcheckCall||''):''};if(i+1<arr.length){const a2=arr[i+1],f2=isSC?(a2.soundcheckFecha||a2.fecha):a2.fecha,si2=t2a(f2,isSC?a2.soundcheckInicio:a2.inicio),sf2=adjO(si2,t2a(f2,isSC?a2.soundcheckFin:a2.fin));nxt={si:si2,sf:sf2,color:artistColor(a2),name:a2.nombre,notes:isSC?(a2.soundcheckNotas||''):(a2.notas||''),call:isSC?(a2.soundcheckCall||''):''};}break;}else if(sm>nm&&!nxt){nxt={si,sf,color:artistColor(a),name:a.nombre,notes:isSC?(a.soundcheckNotas||''):(a.notas||''),call:isSC?(a.soundcheckCall||''):''};break;}}
+  for(let i=0;i<arr.length;i++){const a=arr[i],f=isSC?(a.soundcheckFecha||a.fecha):a.fecha,si=t2a(f,isSC?a.soundcheckInicio:a.inicio),sf=adjO(si,t2a(f,isSC?a.soundcheckFin:a.fin));if(si===null)continue;const sm=si%1440,em=sf?sf%1440:sm+60;if(nm>=sm&&nm<em){cur={si,sf,color:artistColor(a),name:a.nombre,notes:isSC?(a.soundcheckNotas||''):(a.notas||''),call:isSC?(a.soundcheckCall||''):'',stage:a.escenario||''};if(i+1<arr.length){const a2=arr[i+1],f2=isSC?(a2.soundcheckFecha||a2.fecha):a2.fecha,si2=t2a(f2,isSC?a2.soundcheckInicio:a2.inicio),sf2=adjO(si2,t2a(f2,isSC?a2.soundcheckFin:a2.fin));nxt={si:si2,sf:sf2,color:artistColor(a2),name:a2.nombre,notes:isSC?(a2.soundcheckNotas||''):(a2.notas||''),call:isSC?(a2.soundcheckCall||''):'',stage:a2.escenario||''};}break;}else if(sm>nm&&!nxt){nxt={si,sf,color:artistColor(a),name:a.nombre,notes:isSC?(a.soundcheckNotas||''):(a.notas||''),call:isSC?(a.soundcheckCall||''):'',stage:a.escenario||''};break;}}
   try{_liveWin.receiveUpdate(allData);}catch(e){}
 }
 
