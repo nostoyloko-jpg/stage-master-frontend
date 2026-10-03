@@ -6313,6 +6313,15 @@ async function checkToken(token){
 }
 
 // ── SUPABASE PROJECT SYNC ─────────────────────────────────────────────
+// ── Sincronización con el servidor ───────────────────────────────────
+// Desactivada: el flujo de trabajo es con archivos (exportar / importar,
+// guardados en Drive), no con el servidor. Con esto la app no hace ninguna
+// petición a Supabase, así que no aparecen proyectos antiguos al recargar ni
+// importa que el servidor esté dormido.
+//
+// Para reactivarla —trabajo en equipo sobre un mismo festival— poner true.
+const SYNC_ENABLED = false;
+
 let _syncEnabled=false;
 let _syncTimer=null;
 let _smIsAdmin=false;
@@ -6320,6 +6329,7 @@ let _smUserName=''
 try{ _smUserName=localStorage.getItem('sm.user_name')||''; }catch(e){}
 
 async function sbApiCall(endpoint, method='GET', body=null){
+  if(!SYNC_ENABLED) return null;   // única puerta de salida hacia el servidor
   const token=getSavedToken();
   if(!token) return null;
   try{
@@ -6365,6 +6375,7 @@ async function saveProjectToServer(){
 }
 
 function startAutoSync(){
+  if(!SYNC_ENABLED){ console.log('[SYNC] desactivada (SYNC_ENABLED=false)'); return; }
   _syncEnabled=true;
   clearInterval(_syncTimer);
   _syncTimer=setInterval(saveProjectToServer, 30000);
@@ -9332,6 +9343,7 @@ async function cmdOpenServer(){
 }
 
 async function loadServerProject(){
+  if(!SYNC_ENABLED){ alert('La sincronización con el servidor está desactivada.\n\nSe trabaja con archivos: Archivo → Abrir / Guardar como.'); return; }
   closeModal('modal-open-server');
   const loaded=await loadProjectFromServer();
   if(loaded){
