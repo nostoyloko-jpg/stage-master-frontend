@@ -10192,26 +10192,33 @@ async function runPdfExport(){
       // ── Spare formula ──
       function spare(n){ return Math.max(1, Math.ceil(n*0.15)); }
 
-      // ── 1-3. Mics, DIs and stands — reuse the same counting rules as the on-screen Load Out
-      // (skips "ya montado" channels; combines ♻ reusable artists by MAX instead of SUM).
-      const pdfStats=computeLoadStats(S.artists);
-      const micCount=pdfStats.micCount;
-      const pieC=pdfStats.piC, pieA=pdfStats.piA, pieP=pdfStats.piP, pieR=pdfStats.piR;
+      // ── Material a preparar ──────────────────────────────────────────
+      // Se toma el MÁXIMO entre días, no la suma: si el día 1 hacen falta 32
+      // pies y el día 2 otros 28, con 32 basta — se recogen y se remontan.
+      // (El PDF venía sumando todos los días, lo que inflaba las cifras.)
+      const pdfOpts = { normalize: n => normalizeGearName(cleanForPDF(n)) };
+      const pdfDays = SMCore.groupByFestivalDate(S, false);
+      const pdfFixed = new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
 
-      // ── 4. Mangueras — fixed count as 1, variable count per artist ──
-      const rows=[];
-
-      // Las filas las genera el dominio, las mismas que la tabla en pantalla.
-      // Antes el PDF recalculaba mangueras y cajetines por su cuenta —y contaba
-      // las variables por artista en vez de por sistema—, así que pantalla y PDF
-      // daban cifras distintas.
-      SMCore.buildLoadOutRows(pdfStats._core).forEach(r=>{
-        const letter = r.key ? r.key.split('_').pop() : '';
-        let item = r.item;
-        if(r.cat==='MANGUERA' && pdfStats.fixedLetters.has(letter)) item = `Manguera ${letter} (fija)`;
-        if(r.cat==='CAJETIN') item = `Cajetines — Manguera ${letter} ×${r.need}`;
-        rows.push([r.cat, item, r.need, r.spare, r.total, '', '']);
+      const maxByKey = new Map();
+      (pdfDays.length ? pdfDays : [{ artists: S.artists }]).forEach(d => {
+        const stats = SMCore.computeStats(S, d.artists, pdfOpts);
+        SMCore.buildLoadOutRows(stats).forEach(r => {
+          const prev = maxByKey.get(r.key);
+          if (!prev || r.total > prev.total) maxByKey.set(r.key, r);
+        });
       });
+
+      const catOrder = { MICRO:0, PIE:1, MANGUERA:2, 'CABLE LINK':3, CAJETIN:4 };
+      const rows = [...maxByKey.values()]
+        .sort((a,b) => (catOrder[a.cat]-catOrder[b.cat]) || (b.total-a.total))
+        .map(r => {
+          const letter = r.key ? r.key.split('_').pop() : '';
+          let item = r.item;
+          if (r.cat==='MANGUERA' && pdfFixed.has(letter)) item = `Manguera ${letter} (fija)`;
+          if (r.cat==='CAJETIN') item = `Cajetines — Manguera ${letter} ×${r.need}`;
+          return [r.cat, item, r.need, r.spare, r.total, '', ''];
+        });
 
       pdf.autoTable({
         ...AT_STYLES,
@@ -12498,6 +12505,23 @@ window.smCheck=function(){
     mang.forEach(([l,n])=>{
       const porSistema = (core.systems && core.systems[l]) ? core.systems[l].size : n;
       cmp('manguera '+l+' por sistema', n, porSistema);
+    });
+  })();
+
+  // El total del festival nunca puede ser la SUMA de los días: eso infla el
+  // material. Debe ser el máximo de las jornadas. (El PDF lo hacía mal.)
+  (function(){
+    const o={normalize:n=>normalizeGearName(cleanForPDF(n))};
+    const dias=SMCore.groupByFestivalDate(S,false);
+    if(dias.length<2) return;
+    const porDia=dias.map(d=>SMCore.computeStats(S,d.artists,o));
+    SMCore.PIE_KEYS.forEach(k=>{
+      const maxDia=Math.max(...porDia.map(s=>s.pies[k]||0));
+      const sumaDias=porDia.reduce((s,x)=>s+(x.pies[k]||0),0);
+      const fest=SMCore.computeFestivalMax(S,o).pies[k]||0;
+      if(fest!==maxDia) difs.push({elemento:'máx festival pie '+k, dominio:fest, app:maxDia});
+      if(sumaDias>maxDia && fest===sumaDias)
+        difs.push({elemento:'pie '+k+' SUMA días en vez de máximo', dominio:maxDia, app:sumaDias});
     });
   })();
 
