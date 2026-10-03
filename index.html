@@ -5151,31 +5151,50 @@ function countStereoDiBoxes(a){
   return boxes;
 }
 
-function updBadges(a){
-  const m=a.channels.filter(c=>c.micro&&!isLineInput(c.micro)).length;
-  const dM=a.channels.filter(c=>c.di==='M').length;
-  const dST=countStereoDiBoxes(a);
-  const d=dM+dST;
-  const p=a.channels.reduce((s,c)=>s+PIE_DEFS.filter(pd=>c.pies?.[pd.key]).length,0);
-  const pr=a.channels.filter(c=>c.obs?.toUpperCase().includes('PROPIO')).length;
-  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v;};
-  set(`bc-${a.id}`,`${a.canales} ch`);set(`bm-${a.id}`,`${m} mics`);set(`bd-${a.id}`,`${dM}M+${dST}ST`);
-  set(`bp-${a.id}`,`${p} pies`);set(`bpr-${a.id}`,`${pr} propios`);
-  if(curAid===a.id){set('ta-mic',`${m} mics`);set('ta-di',`${dM}M+${dST}ST`);}
+/**
+ * Recuentos por artista para los badges y el resumen de su CH list.
+ * Son cifras INFORMATIVAS sobre los canales del artista (cuántos llevan micro,
+ * DI, pie...), no el material a preparar — eso lo calcula SMCore.computeStats
+ * aplicando exclusiones y la regla de reutilizable.
+ *
+ * Centralizado aquí para que badges y resumen no puedan descuadrarse entre sí.
+ */
+function artistBadgeStats(a){
+  const chs=a.channels||[];
+  const pies={};
+  PIE_DEFS.forEach(p=>{pies[p.key]=chs.filter(c=>c.pies?.[p.key]).length;});
+  return {
+    canales: a.canales,
+    micros:  chs.filter(c=>c.micro&&!isLineInput(c.micro)&&!SMCore.isPropio(c.micro)).length,
+    diMono:  chs.filter(c=>c.di==='M').length,
+    diStereo:SMCore.stereoDiBoxes(a),
+    pies,
+    piesTotal:Object.values(pies).reduce((s,n)=>s+n,0),
+    // "Propios" = los marcados con el micro 🎤 Propio, más los que lo indican
+    // en observaciones (forma antigua, anterior a esa opción).
+    propios: chs.filter(c=>SMCore.isPropio(c.micro)||c.obs?.toUpperCase().includes('PROPIO')).length,
+  };
 }
+
+function updBadges(a){
+  const s=artistBadgeStats(a);
+  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v;};
+  set(`bc-${a.id}`,`${s.canales} ch`);
+  set(`bm-${a.id}`,`${s.micros} mics`);
+  set(`bd-${a.id}`,`${s.diMono}M+${s.diStereo}ST`);
+  set(`bp-${a.id}`,`${s.piesTotal} pies`);
+  set(`bpr-${a.id}`,`${s.propios} propios`);
+  if(curAid===a.id){set('ta-mic',`${s.micros} mics`);set('ta-di',`${s.diMono}M+${s.diStereo}ST`);}
+}
+
 function updChSum(a){
   const el=document.getElementById(`chsum-${a.id}`);if(!el)return;
-  const m=a.channels.filter(c=>c.micro&&!isLineInput(c.micro)).length;
-  const dM=a.channels.filter(c=>c.di==='M').length;
-  const dST=countStereoDiBoxes(a);
-  const d=dM+dST;
-  const pc=PIE_DEFS.reduce((acc,p)=>{acc[p.key]=a.channels.filter(c=>c.pies?.[p.key]).length;return acc;},{});
-  const pr=a.channels.filter(c=>c.obs?.toUpperCase().includes('PROPIO')).length;
-  el.innerHTML=`<span>${t('conMicro')}:<b style="color:var(--green);margin-left:4px">${m}</b></span>`+
-    `<span>${t('diMono')}:<b style="color:var(--blue);margin-left:4px">${dM}</b></span>`+
-    `<span>${t('diStereo')}:<b style="color:var(--blue);margin-left:4px">${dST}</b></span>`+
-    PIE_DEFS.map(p=>`<span>${t('pieLbl')} ${p.label}:<b style="color:var(--amber);margin-left:4px">${pc[p.key]}</b></span>`).join('')+
-    `<span>${t('propios')}:<b style="color:var(--blue);margin-left:4px">${pr}</b></span>`;
+  const s=artistBadgeStats(a);
+  el.innerHTML=`<span>${t('conMicro')}:<b style="color:var(--green);margin-left:4px">${s.micros}</b></span>`+
+    `<span>${t('diMono')}:<b style="color:var(--blue);margin-left:4px">${s.diMono}</b></span>`+
+    `<span>${t('diStereo')}:<b style="color:var(--blue);margin-left:4px">${s.diStereo}</b></span>`+
+    PIE_DEFS.map(p=>`<span>${t('pieLbl')} ${p.label}:<b style="color:var(--amber);margin-left:4px">${s.pies[p.key]}</b></span>`).join('')+
+    `<span>${t('propios')}:<b style="color:var(--blue);margin-left:4px">${s.propios}</b></span>`;
 }
 
 // ── TIME UTILS ──
@@ -12661,6 +12680,15 @@ window.smCheck=function(){
     cmp('Manguera '+l,  core.mangueras[l], (app.sbCount||{})[l]);
     cmp('Cajetines '+l, core.cajetines[l], (app.cajetinesByLetter||{})[l]);
     cmp('Cables '+l,    core.cables[l],    (app.linkCablesByLetter||{})[l]);
+  });
+
+  // Badges: el helper compartido debe coincidir con el cálculo directo canal a canal.
+  S.artists.forEach(a=>{
+    const b=artistBadgeStats(a);
+    cmp('badge DI-ST · '+a.nombre, b.diStereo, SMCore.stereoDiBoxes(a));
+    cmp('badge DI-M · '+a.nombre,  b.diMono,   a.channels.filter(c=>c.di==='M').length);
+    cmp('badge pies · '+a.nombre,  b.piesTotal,
+        a.channels.reduce((s,c)=>s+PIE_DEFS.filter(p=>c.pies?.[p.key]).length,0));
   });
 
   console.log('%cArtistas: '+S.artists.length+' · Canales: '+S.artists.reduce((s,a)=>s+a.channels.length,0),'font-weight:bold');
