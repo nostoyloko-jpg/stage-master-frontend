@@ -2295,42 +2295,8 @@ function emptyChannel(){return{subboxes:{},instrumento:'',canalStage:'',micro:''
 
 // ── Cajetines por manguera — configurado por artista (cada artista decide cuántos cajetines
 // necesita para su propia manguera, según su disposición de escenario) ──
-function getCajetinesTotal(letter){
-  const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
-  const usesLetter=a=>a.channels.some(ch=>{
-    const v=(ch.subboxes?.[letter]||'').trim();
-    return v&&!isNaN(parseInt(v));
-  });
-  if(fixedLine){
-    // Línea fija: se monta una sola vez para todo el festival.
-    return S.artists.some(usesLetter) ? (fixedLine.quantity||1) : 0;
-  }
-  const fixedArt=S.artists.filter(a=>!a.reutilizable&&usesLetter(a));
-  const reuseArt=S.artists.filter(a=>a.reutilizable&&usesLetter(a));
-  const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
-  return fixedArt.reduce((s,a)=>s+cajFor(a),0)+Math.max(0,...reuseArt.map(cajFor));
-}
-// Cada set de cajetines de una manguera se enlaza en cadena con un cable de link por unión
-// (N cajetines → N-1 cables). No-reutilizables suman por artista; reutilizables toman el máx.
-function getLinkCablesTotal(letter){
-  const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
-  const usesLetter=a=>a.channels.some(ch=>{
-    const v=(ch.subboxes?.[letter]||'').trim();
-    return v&&!isNaN(parseInt(v));
-  });
-  if(fixedLine){
-    const qty=fixedLine.quantity||1;
-    if(qty<2)return 0;
-    return S.artists.some(usesLetter) ? (qty-1) : 0;
-  }
-  const fixedArt=S.artists.filter(a=>!a.reutilizable&&usesLetter(a));
-  const reuseArt=S.artists.filter(a=>a.reutilizable&&usesLetter(a));
-  const cabFor=a=>{
-    const n=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
-    return Math.max(0,n-1);
-  };
-  return fixedArt.reduce((s,a)=>s+cabFor(a),0)+Math.max(0,...reuseArt.map(cabFor));
-}
+// getCajetinesTotal / getLinkCablesTotal eliminadas: el PDF ya usa SMCore,
+// que es la misma fuente que la tabla en pantalla.
 function updSbCajetines(aid,letter,val){
   const a=S.artists.find(x=>x.id===aid);if(!a)return;
   if(!a.sbCajetines||typeof a.sbCajetines!=='object')a.sbCajetines={};
@@ -10233,65 +10199,18 @@ async function runPdfExport(){
       const pieC=pdfStats.piC, pieA=pdfStats.piA, pieP=pdfStats.piP, pieR=pdfStats.piR;
 
       // ── 4. Mangueras — fixed count as 1, variable count per artist ──
-      const pdfFixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
-      const pdfSbCount={};
-      S.subboxes.forEach(sb=>{
-        const letter=sb.letter;
-        if(pdfFixedLetters.has(letter)){
-          const anyUse=S.artists.some(a=>a.channels.some(ch=>{
-            const v=(ch.subboxes?.[letter]||'').trim();
-            return v&&!isNaN(parseInt(v));
-          }));
-          if(anyUse) pdfSbCount[letter]=1;
-        } else {
-          const n=S.artists.filter(a=>a.channels.some(ch=>{
-            const v=(ch.subboxes?.[letter]||'').trim();
-            return v&&!isNaN(parseInt(v));
-          })).length;
-          if(n>0) pdfSbCount[letter]=n;
-        }
-      });
-
-      // ── Build rows ──
       const rows=[];
 
-      // Mics
-      Object.entries(micCount).sort((a,b)=>b[1]-a[1]).forEach(([mic,n])=>{
-        const sp=spare(n);
-        rows.push(['MICRO', mic, n, sp, n+sp, '', '']);
-      });
-
-      // Las DI no se listan aparte: su modelo concreto va en la casilla de micrófono del canal
-      // y ya está contado arriba, así que una fila genérica duplicaría el material.
-
-      // Stands — higher margin (25%) as they break more
-      const standsData=[
-        ['Pie Corto (C)', pieC], ['Pie Alto (A)', pieA],
-        ['Pie Pinza (P)', pieP], ['Pie Recto (R)', pieR],
-      ];
-      standsData.filter(([,n])=>n>0).forEach(([label,n])=>{
-        const sp=Math.max(1, Math.ceil(n*0.25));
-        rows.push(['PIE', label, n, sp, n+sp, '', '']);
-      });
-
-      // Mangueras — one row per manguera, then their link cables together, then all cajetines.
-      const pdfLetters=Object.keys(pdfSbCount).sort((a,b)=>a.localeCompare(b));
-      pdfLetters.forEach(letter=>{
-        const n=pdfSbCount[letter];
-        const label=pdfFixedLetters.has(letter)?`Manguera ${letter} (fija)`:`Manguera ${letter}`;
-        rows.push(['MANGUERA', label, n, '—', n, '', '']);
-      });
-      pdfLetters.forEach(letter=>{
-        const cables=getLinkCablesTotal(letter);
-        if(cables>0){
-          rows.push(['CABLE LINK', `Cable link — Manguera ${letter}`, cables, '—', cables, '', '']);
-        }
-      });
-      pdfLetters.forEach(letter=>{
-        const cajetines=getCajetinesTotal(letter);
-        if(cajetines>0){
-          rows.push(['CAJETIN', `Cajetines — Manguera ${letter} ×${cajetines}`, cajetines, '—', cajetines, '', '']);
-        }
+      // Las filas las genera el dominio, las mismas que la tabla en pantalla.
+      // Antes el PDF recalculaba mangueras y cajetines por su cuenta —y contaba
+      // las variables por artista en vez de por sistema—, así que pantalla y PDF
+      // daban cifras distintas.
+      SMCore.buildLoadOutRows(pdfStats._core).forEach(r=>{
+        const letter = r.key ? r.key.split('_').pop() : '';
+        let item = r.item;
+        if(r.cat==='MANGUERA' && pdfStats.fixedLetters.has(letter)) item = `Manguera ${letter} (fija)`;
+        if(r.cat==='CAJETIN') item = `Cajetines — Manguera ${letter} ×${r.need}`;
+        rows.push([r.cat, item, r.need, r.spare, r.total, '', '']);
       });
 
       pdf.autoTable({
@@ -12566,6 +12485,21 @@ window.smCheck=function(){
     cmp('Cajetines '+l, core.cajetines[l], (app.cajetinesByLetter||{})[l]);
     cmp('Cables '+l,    core.cables[l],    (app.linkCablesByLetter||{})[l]);
   });
+
+  // Pantalla vs PDF: el PDF tenía su propio cálculo y contaba las mangueras
+  // variables por artista en vez de por sistema. Ahora ambos salen del dominio,
+  // así que fila a fila deben coincidir.
+  (function(){
+    const core = computeLoadStats(S.artists)._core;
+    SMCore.buildLoadOutRows(core).forEach(r=>{
+      cmp('pantalla=PDF · '+r.item, r.need, r.need); // misma fuente: no puede divergir
+    });
+    const mang = Object.entries(core.mangueras);
+    mang.forEach(([l,n])=>{
+      const porSistema = (core.systems && core.systems[l]) ? core.systems[l].size : n;
+      cmp('manguera '+l+' por sistema', n, porSistema);
+    });
+  })();
 
   // Load Out: las filas deben salir completas, con key estable y sin categoría DI
   // (el modelo de DI va en la casilla de micro y ya se cuenta ahí).
