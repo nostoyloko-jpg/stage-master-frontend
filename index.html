@@ -4761,8 +4761,10 @@ function showRecintoMiniMap(lat, lng, label){
     const map = L.map(container, {zoomControl:true, scrollWheelZoom:false})
       .setView([lat,lng], 15);
     window._recintoMapInst = map;
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-      {attribution:'© CARTO © OSM contributors',maxZoom:19,subdomains:'abcd'}).addTo(map);
+    // CARTO pasó a exigir clave de API y estampaba "API REQUIRED" sobre el mapa.
+    // OpenStreetMap es libre y no necesita clave.
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(map);
     const icon=L.divIcon({
       html:'<div style="width:16px;height:16px;background:#e94560;border:3px solid #fff;border-radius:50%;box-shadow:0 0 8px rgba(233,69,96,.6)"></div>',
       iconSize:[16,16],iconAnchor:[8,8],className:''
@@ -4817,8 +4819,10 @@ function renderOrdenMap(){
     window._ordenMap = null;
     const map = L.map(mapEl, {zoomControl:true, scrollWheelZoom:false})
       .setView([lat,lng], 16);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-      {attribution:'© CARTO © OSM contributors',maxZoom:19,subdomains:'abcd'}).addTo(map);
+    // CARTO pasó a exigir clave de API y estampaba "API REQUIRED" sobre el mapa.
+    // OpenStreetMap es libre y no necesita clave.
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {attribution:'© OpenStreetMap contributors',maxZoom:19}).addTo(map);
     window._ordenMap = map;
     _ordenMapRef = map;
     // Venue marker
@@ -5065,7 +5069,7 @@ function openMapWindow(){
   d.write('var _lat='+lat+',_lng='+lng+',_map=null;');
   d.write('function initMap(){');
   d.write('  _map=L.map("map").setView([_lat,_lng],15);');
-  d.write('  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",{attribution:"© CARTO © OSM",maxZoom:19,subdomains:"abcd"}).addTo(_map);');
+  d.write('  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap contributors",maxZoom:19}).addTo(_map);');
   d.write('  var vi=L.divIcon({html:"<div style=\\"width:16px;height:16px;background:#e94560;border:3px solid #fff;border-radius:50%;box-shadow:0 0 6px rgba(233,69,96,.7)\\"><\\/div>",iconSize:[16,16],iconAnchor:[8,8],className:""});');
   d.write('  L.marker([_lat,_lng],{icon:vi}).addTo(_map).bindPopup("<b>'+vname+'<\\/b>").openPopup();');
   d.write('  if(window._pendingPlaces) renderPlaces(window._pendingPlaces);');
