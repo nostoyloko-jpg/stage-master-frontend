@@ -2982,7 +2982,7 @@ function getPatchErrorsForArtist(a){
   S.subboxes.forEach(sb=>{
     const seen={};
     a.channels.forEach((ch,ci)=>{
-      const val=StringString(ch.subboxes?.[sb.letter]||'').trim();
+      const val=String(ch.subboxes?.[sb.letter]||'').trim();
       if(!val||val==='false'||val==='true'||/^[a-zA-Z]$/.test(val)) return;
       const num=parseInt(val);
       if(isNaN(num)||num<1) return;
@@ -3404,7 +3404,7 @@ function validarPatch(aid, idx, sbLetter, valor){
   if(!a) return null;
   const dup=a.channels.findIndex((ch,ci)=>{
     if(ci===idx) return false;
-    return StringString(ch.subboxes?.[sbLetter]||'').trim()===val;
+    return String(ch.subboxes?.[sbLetter]||'').trim()===val;
   });
   if(dup>=0) return `Duplicado — Canal ${dup+1} ya usa ${sbLetter}${val}`;
 
