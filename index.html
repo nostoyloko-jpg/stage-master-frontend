@@ -960,7 +960,7 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
 
   const usesLetter = (artist, letter) =>
     (artist.channels || []).some(ch => {
-      const v = (ch.subboxes?.[letter] || '').trim();
+      const v = String(ch.subboxes?.[letter]||'').trim();
       return v && !Number.isNaN(parseInt(v, 10));
     });
 
@@ -2286,6 +2286,14 @@ function migrateA(a){
     if(ch.phantom===undefined)ch.phantom=false;
     ch.phantom=!!ch.phantom;
     if(ch.diLink===undefined)ch.diLink='';
+    // Los conectores se guardan como texto. Un JSON externo puede traerlos como
+    // número ({A: 1} en vez de {A: '1'}), y entonces cualquier .trim() reventaba.
+    if(ch.subboxes && typeof ch.subboxes==='object'){
+      for(const k in ch.subboxes){
+        const v=ch.subboxes[k];
+        ch.subboxes[k] = (v===null||v===undefined) ? '' : String(v);
+      }
+    }
     if(ch.premontado===undefined)ch.premontado=false;
     ch.premontado=!!ch.premontado;
   });
@@ -2852,7 +2860,7 @@ function getPatchErrorsForArtist(a){
   S.subboxes.forEach(sb=>{
     const seen={};
     a.channels.forEach((ch,ci)=>{
-      const val=String(ch.subboxes?.[sb.letter]||'').trim();
+      const val=StringString(ch.subboxes?.[sb.letter]||'').trim();
       if(!val||val==='false'||val==='true'||/^[a-zA-Z]$/.test(val)) return;
       const num=parseInt(val);
       if(isNaN(num)||num<1) return;
@@ -2977,7 +2985,7 @@ function buildArtistPage(a){
   const sbSubThs=sbs.map((sb,i)=>`<th class="sb-th-${i} sb-sub-col" style="width:34px;background:${hex2rgba(sb.color,0.40)};color:${sb.color}">${sb.letter}</th>`).join('');
   // Cajetines por manguera — solo mangueras no fijas que este artista realmente usa
   const fixedLettersSet=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
-  const usedSbLetters=sbs.filter(sb=>!fixedLettersSet.has(sb.letter)&&a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim()));
+  const usedSbLetters=sbs.filter(sb=>!fixedLettersSet.has(sb.letter)&&a.channels.some(ch=>String(ch.subboxes?.[sb.letter]||'').trim()));
   const cajetinesControls=usedSbLetters.map(sb=>{
     const val=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[sb.letter])||1));
     const names=Array.isArray(a.sbCajetinesNames?.[sb.letter])?a.sbCajetinesNames[sb.letter]:[];
@@ -3019,7 +3027,7 @@ function buildArtistPage(a){
     const isPairFollower=validPairFollower.has(i);
     const _sbVisual=_sbVisualMode.has(a.id);
     const sbCells=sbs.map((sb,si)=>{
-      const val=(ch.subboxes?.[sb.letter]||'').trim();
+      const val=String(ch.subboxes?.[sb.letter]||'').trim();
       if(_sbVisual){
         // Visual pill mode — click to open picker
         const pill=val
@@ -3036,7 +3044,7 @@ function buildArtistPage(a){
       +S.micros.map(m=>{const nm=typeof m==='string'?m:m.nombre;return`<option value="${esc(nm)}"${ch.micro===nm?' selected':''}>${esc(nm)}</option>`;}).join('');
     // Build simple-mode subbox summary pills
     const sbPills=sbs.map(sb=>{
-      const val=(ch.subboxes?.[sb.letter]||'').trim();
+      const val=String(ch.subboxes?.[sb.letter]||'').trim();
       if(!val)return'';
       return`<span class="sb-pill" style="background:${hex2rgba(sb.color,0.22)};color:${sb.color}"><span class="sb-pill-letter">${sb.letter}</span>${esc(val)}</span>`;
     }).join('');
@@ -3274,7 +3282,7 @@ function validarPatch(aid, idx, sbLetter, valor){
   if(!a) return null;
   const dup=a.channels.findIndex((ch,ci)=>{
     if(ci===idx) return false;
-    return String(ch.subboxes?.[sbLetter]||'').trim()===val;
+    return StringString(ch.subboxes?.[sbLetter]||'').trim()===val;
   });
   if(dup>=0) return `Duplicado — Canal ${dup+1} ya usa ${sbLetter}${val}`;
 
@@ -3578,7 +3586,7 @@ function openSlotChannelPicker(sbLetter, slot, ev, artistId){
   S.artists.forEach(a=>{
     if(artistId && a.id!==artistId) return;
     a.channels.forEach((ch,ci)=>{
-      if((ch.subboxes?.[sbLetter]||'').trim()===String(slot)){
+      if(String(ch.subboxes?.[sbLetter]||'').trim()===String(slot)){
         current.push({artistId:a.id,chIdx:ci,instrumento:ch.instrumento,artistName:a.nombre,chNum:ci+1});
       }
     });
@@ -3651,7 +3659,7 @@ function openSlotChannelPicker(sbLetter, slot, ev, artistId){
     </div>`;
     html += `<div style="display:flex;flex-direction:column;gap:1px">`;
     a.channels.forEach((ch,ci)=>{
-      const curSlot=(ch.subboxes?.[sbLetter]||'').trim();
+      const curSlot=String(ch.subboxes?.[sbLetter]||'').trim();
       const isHere = curSlot===String(slot);
       const isElsewhere = curSlot && curSlot!==String(slot);
       const instr = (ch.instrumento||'').toUpperCase()||('CANAL '+(ci+1));
@@ -3783,7 +3791,7 @@ function openSBPicker(artistId, chIdx, sbLetter){
   S.artists.forEach(artist => {
     if(!isFixedSb && artist.id!==artistId) return; // variable box: skip other artists
     artist.channels.forEach((c2, ci) => {
-      const v = (c2.subboxes?.[sbLetter]||'').trim();
+      const v = String(c2.subboxes?.[sbLetter]||'').trim();
       if(!v) return;
       const sn = parseInt(v);
       if(isNaN(sn)||sn<1||sn>maxSlot) return;
@@ -3792,7 +3800,7 @@ function openSBPicker(artistId, chIdx, sbLetter){
     });
   });
 
-  const currentSlot = parseInt((ch.subboxes?.[sbLetter]||'').trim())||null;
+  const currentSlot = parseInt(String(ch.subboxes?.[sbLetter]||'').trim())||null;
 
   let svg = `<svg width="${svgW}" height="${svgH}" style="display:block;cursor:pointer">`;
   svg += `<rect x="1" y="1" width="${svgW-2}" height="${svgH-2}" rx="7" fill="var(--bg3)" stroke="${sb.color}" stroke-width="1.5"/>`;
@@ -3877,7 +3885,7 @@ function applySBPicker(slot){
     S.artists.forEach(artist => {
       artist.channels.forEach((c2, ci) => {
         if(artist.id===artistId && ci===chIdx) return; // skip self
-        const v = (c2.subboxes?.[sbLetter]||'').trim();
+        const v = String(c2.subboxes?.[sbLetter]||'').trim();
         if(parseInt(v)===slot){
           if(!c2.subboxes) c2.subboxes={};
           c2.subboxes[sbLetter] = '';
@@ -4216,8 +4224,12 @@ function liveWindowScript(){
         '<div class="cvsw"><canvas id="cvs-'+i+'"></canvas></div>'+
         '<div class="striph" data-si="'+i+'" title="Arrastra para ajustar el alto de esta fila"></div>';
       // Alto individual: si el usuario lo ha fijado, se respeta; si no, reparto equitativo.
-      const savedH=STRIP_H[i];
-      if(savedH){ s.style.flex='0 0 '+savedH+'px'; } else { s.style.flex='1 1 0'; }
+      // Altura FIJA en todas las barras. Antes eran flexibles, así que agrandar
+      // una encogía las demás y nunca se desbordaba: el scroll vertical no servía
+      // de nada. Ahora agrandar una empuja al resto hacia abajo y el scroll sí
+      // tiene recorrido.
+      const savedH = STRIP_H[i] || baseH;
+      s.style.flex = '0 0 ' + savedH + 'px';
       bot.appendChild(s);
     }
     // Arrastre del borde inferior de cada barra para ajustar su alto por separado.
@@ -4250,7 +4262,8 @@ function liveWindowScript(){
         e.preventDefault();e.stopPropagation();
         const idx=parseInt(h.dataset.si);
         delete STRIP_H[idx];saveStripH();
-        h.parentElement.style.flex='1 1 0';
+        // Vuelve al alto de reparto, no a modo flexible: las barras son fijas.
+        buildStrips(_stripCount);
         requestAnimationFrame(redraw);
       };
     });
@@ -5685,11 +5698,11 @@ function renderSummary(){
       const colTotals={};letters.forEach(l=>colTotals[l]=0);
       systems.forEach((sys,key)=>{
         const cells=varSbs.map(sb=>{
-          const uses=sys.artists.some(a=>a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim()));
+          const uses=sys.artists.some(a=>a.channels.some(ch=>String(ch.subboxes?.[sb.letter]||'').trim()));
           if(uses)colTotals[sb.letter]++;
           return `<td class="${uses?'':'zero'}" style="text-align:center;${uses?'background:'+hex2rgba(sb.color,0.10)+';font-weight:700':''}">${uses?1:'—'}</td>`;
         }).join('');
-        const rowTotal=varSbs.filter(sb=>sys.artists.some(a=>a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim()))).length;
+        const rowTotal=varSbs.filter(sb=>sys.artists.some(a=>a.channels.some(ch=>String(ch.subboxes?.[sb.letter]||'').trim()))).length;
         if(!rowTotal)return; // sistema sin mangueras variables
         const names=sys.artists.map(a=>esc(a.nombre)).join(', ');
         rowsHtml+=`<tr>
@@ -5711,7 +5724,7 @@ function renderSummary(){
         <td class="tcol" style="color:var(--accent)">${totalMang}</td>
       </tr>`;
       // Fixed mangueras sit OUTSIDE the system grid — rigged once for the whole festival.
-      const fixedSbs=S.subboxes.filter(sb=>fixedLetters.has(sb.letter)&&artists.some(a=>a.channels.some(ch=>(ch.subboxes?.[sb.letter]||'').trim())));
+      const fixedSbs=S.subboxes.filter(sb=>fixedLetters.has(sb.letter)&&artists.some(a=>a.channels.some(ch=>String(ch.subboxes?.[sb.letter]||'').trim())));
       const fixedRowsHtml=fixedSbs.length?`
         <tr><td colspan="${varSbs.length+2}" style="padding-top:10px;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);border-top:1px solid var(--border)">Mangueras fijas — fuera de los sistemas, se montan 1 vez</td></tr>
         ${fixedSbs.map(sb=>{
@@ -5732,7 +5745,7 @@ function renderSummary(){
           if(!n)return'';
           const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
           const letter=sb.letter;
-          const usesLetter=a=>a.channels.some(ch=>(ch.subboxes?.[letter]||'').trim());
+          const usesLetter=a=>a.channels.some(ch=>String(ch.subboxes?.[letter]||'').trim());
           const fl=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
           const cabFor=a=>{
             if(!usesLetter(a))return 0;
@@ -5756,7 +5769,7 @@ function renderSummary(){
     const cajColTotals=artists.map(()=>0); // total por artista
     const sbR=S.subboxes.map(sb=>{
       const letter=sb.letter;
-      const usesLetter=a=>a.channels.some(ch=>(ch.subboxes?.[letter]||'').trim());
+      const usesLetter=a=>a.channels.some(ch=>String(ch.subboxes?.[letter]||'').trim());
       const isFixed=fixedLetters.has(letter);
       let counts,total;
       if(isFixed){
@@ -5927,7 +5940,7 @@ function renderRchListBody(artists){
         else{
           // SB pills: letter+slot on subbox color
           const pills=sbs.map(sb=>{
-            const v=(ch.subboxes?.[sb.letter]||'').trim();
+            const v=String(ch.subboxes?.[sb.letter]||'').trim();
             if(!v)return'';
             return`<span style="display:inline-flex;align-items:center;gap:1px;background:${hex2rgba(sb.color,0.8)};color:#fff;border-radius:3px;padding:1px 5px;font-size:10px;font-weight:700;font-family:monospace;line-height:1.4;white-space:nowrap">${sb.letter}<span style="opacity:.7;margin-left:2px">${esc(v)}</span></span>`;
           }).filter(Boolean).join(' ');
@@ -6029,7 +6042,7 @@ function renderSbListBody(artists){
       const slots={};
       artists.forEach(a=>{
         a.channels.forEach((ch,ci)=>{
-          const val=(ch.subboxes?.[sb.letter]||'').trim();
+          const val=String(ch.subboxes?.[sb.letter]||'').trim();
           if(!val)return;
           const slotNum=parseInt(val);
           const maxSlot=(S.sbConfig?.rows||2)*(S.sbConfig?.cols||8);
@@ -6047,7 +6060,7 @@ function renderSbListBody(artists){
       html+=renderSubboxSVG(sb,slots);
       // Mic lock bar: mics used in this fixed subbox
       const micNamesInSb=new Set();
-      artists.forEach(a=>a.channels.forEach(ch=>{if((ch.subboxes?.[sb.letter]||'').trim()&&ch.micro)micNamesInSb.add(ch.micro);}));
+      artists.forEach(a=>a.channels.forEach(ch=>{if(String(ch.subboxes?.[sb.letter]||'').trim()&&ch.micro)micNamesInSb.add(ch.micro);}));
       if(micNamesInSb.size){
         const micItems=[...micNamesInSb].map(nm=>{
           const micObj=S.micros.find(m=>typeof m==='object'&&m.nombre===nm);
@@ -6072,7 +6085,7 @@ function renderSbListBody(artists){
 
     // Check if this artist has any assignments in variable subboxes
     const hasAny=varSbs.some(sb=>a.channels.some(ch=>{
-      const v=(ch.subboxes?.[sb.letter]||'').trim();
+      const v=String(ch.subboxes?.[sb.letter]||'').trim();
       return v && !isNaN(parseInt(v));
     }));
     if(!hasAny)return;
@@ -6090,7 +6103,7 @@ function renderSbListBody(artists){
     varSbs.forEach(sb=>{
       const slots={};
       a.channels.forEach((ch,ci)=>{
-        const val=(ch.subboxes?.[sb.letter]||'').trim();
+        const val=String(ch.subboxes?.[sb.letter]||'').trim();
         if(!val)return;
         const slotNum=parseInt(val);
         const maxSlot=(S.sbConfig?.rows||2)*(S.sbConfig?.cols||8);
@@ -10463,7 +10476,7 @@ async function runPdfExport(){
           const pies=[ch.pies?.C?'C':'',ch.pies?.A?'A':'',ch.pies?.P?'P':'',ch.pies?.R?'R':''].filter(Boolean).join('');
           let subStr='';
           S.subboxes.forEach(sb=>{
-            const v=(ch.subboxes?.[sb.letter]||'').trim();
+            const v=String(ch.subboxes?.[sb.letter]||'').trim();
             if(v) subStr+=sb.letter+v+' ';
           });
           allRows.push({
@@ -10527,7 +10540,7 @@ async function runPdfExport(){
         for(const sb of S.subboxes){
           const slots={};
           a.channels.forEach((ch,ci)=>{
-            const v=(ch.subboxes?.[sb.letter]||'').trim();
+            const v=String(ch.subboxes?.[sb.letter]||'').trim();
             if(!v||isNaN(parseInt(v))) return;
             const slotNum=parseInt(v);
             if(!slots[slotNum]) slots[slotNum]={entries:[], chNum:ci+1, instrumento:'', artistName:a.nombre};
@@ -10615,7 +10628,7 @@ async function runPdfExport(){
         let subStr='';
         if(hasSubs){
           S.subboxes.forEach(sb=>{
-            const v=(ch.subboxes?.[sb.letter]||'').trim();
+            const v=String(ch.subboxes?.[sb.letter]||'').trim();
             if(v) subStr+=sb.letter+v+' ';
           });
         }
