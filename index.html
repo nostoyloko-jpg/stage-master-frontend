@@ -12475,6 +12475,39 @@ function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/<
 // ── Verificación: dominio vs. vistas actuales ────────────────────────
 // Ejecuta smCheck() en la consola. Compara los recuentos de SMCore con los que
 // calcula la app hoy y lista las diferencias. No modifica nada.
+// ── Medidor de rendimiento ───────────────────────────────────────────
+// smPerf() en la consola: mide cuánto tarda cada parte del render para saber
+// dónde está la lentitud antes de optimizar a ciegas.
+window.smPerf=function(){
+  const t=(label,fn,n=20)=>{
+    try{ fn(); }catch(e){ return {parte:label,ms:'—',nota:'no aplicable aquí'}; }
+    const t0=performance.now();
+    for(let i=0;i<n;i++) fn();
+    return {parte:label, ms:+((performance.now()-t0)/n).toFixed(2)};
+  };
+  const opts={normalize:n=>normalizeGearName(cleanForPDF(n))};
+  const dias=SMCore.groupByFestivalDate(S,false);
+  const r=[];
+
+  // Cálculo puro (el dominio)
+  r.push(t('Dominio · un día',      ()=>SMCore.computeStats(S,dias[0]?.artists||[],opts)));
+  r.push(t('Dominio · todos',       ()=>SMCore.computeStats(S,S.artists,opts)));
+  r.push(t('Dominio · máx festival',()=>SMCore.computeFestivalMax(S,opts)));
+
+  // Render de cada vista (cálculo + pintar el DOM)
+  r.push(t('Render · Resumen material', ()=>renderSummary(), 5));
+  r.push(t('Render · Load Out',         ()=>renderLoadOut(), 5));
+  r.push(t('Render · Resumen CH List',  ()=>renderRchList(), 5));
+  r.push(t('Render · Resumen Cajetines',()=>renderSbList(), 5));
+  r.push(t('Render · CH lists (todas)', ()=>rebuildArtistPages(), 3));
+
+  console.log('%cArtistas: '+S.artists.length+' · Canales: '+
+    S.artists.reduce((s,a)=>s+a.channels.length,0)+' · Días: '+dias.length,'font-weight:bold');
+  console.table(r);
+  console.log('%cLo que pase de ~100 ms se nota al usar la app.','color:#888');
+  return r;
+};
+
 window.smCheck=function(){
   if(typeof SMCore==='undefined'){console.error('SMCore no está cargado');return;}
   const opts={normalize:n=>normalizeGearName(cleanForPDF(n))};
