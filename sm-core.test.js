@@ -214,6 +214,121 @@ group('Caché de selectores');
 }
 
 // ═══════════════════════════════════════════════════════════════════
+group('Normalización de tipos');
+{
+  // [REGRESIÓN] Id de sistema numérico contra texto: Set.has fallaba y cada
+  // banda se contaba como sistema propio → 2 mangueras en vez de 1.
+  const crudo = {
+    event:{}, subboxes:[{letter:'a'}], sbConfig:{fixedLines:[]},
+    mangueraSets:[{id:1,label:'Sistema 1'}],
+    artists:[
+      {id:1,nombre:'A',mangueraSet:'1',channels:[{subboxes:{a:1},di:'st',micro:58,pies:{C:'false'}}]},
+      {id:2,nombre:'B',mangueraSet:1,  channels:[{subboxes:{A:'2'},di:'ST',micro:'58',pies:{C:true}}]},
+    ],
+  };
+  const s = C.normalizeState(crudo);
+  eq(s.artists[0].channels[0].subboxes, {A:'1'}, 'claves y valores de subbox a texto y mayúsculas');
+  eq(s.subboxes[0].letter, 'A', 'letra de manguera en mayúsculas');
+  eq(s.artists[0].mangueraSet, '1', 'mangueraSet a texto');
+  eq(s.mangueraSets[0].id, '1', 'id de sistema a texto');
+  eq(s.artists[0].channels[0].di, 'ST', 'di normalizado a mayúsculas');
+  eq(s.artists[0].channels[0].micro, '58', 'micro a texto');
+  eq(s.artists[0].channels[0].pies.C, false, "[REGRESIÓN] 'false' como texto no cuenta como pie");
+  eq(s.artists[1].channels[0].pies.C, true, 'true sí cuenta');
+  eq(C.computeStats(s, s.artists).mangueras.A, 1,
+     '[REGRESIÓN] dos bandas del mismo sistema = 1 manguera, no 2');
+
+  // Sin normalizar, systemKeyOf también debe aguantar (defensa en profundidad)
+  // Sin normalizar la letra sigue en minúscula, así que la clave es 'a'.
+  // Lo que se comprueba aquí es que el conteo por sistema no se descuadre.
+  eq(C.computeStats(crudo, crudo.artists).mangueras.a, 1,
+     'systemKeyOf compara por texto aunque no se haya normalizado');
+
+  // Línea fija con la letra en minúscula
+  const fijo = C.normalizeState({
+    event:{}, subboxes:[{letter:'F'}], mangueraSets:[],
+    sbConfig:{fixedLines:[{sbLetter:'f',quantity:2}]},
+    artists:[{id:1,channels:[{subboxes:{F:'1'}}]}],
+  });
+  eq(C.computeStats(fijo,fijo.artists).mangueras.F, 1, 'línea fija se reconoce pese al caso de la letra');
+  eq(C.computeStats(fijo,fijo.artists).cajetines.F, 2, 'y aplica su cantidad fija');
+
+  eq(C.normalizeState(null).artists, [], 'estado nulo no rompe');
+  eq(C.normalizeChannel(undefined).subboxes, {}, 'canal indefinido no rompe');
+}
+
+group('Datos sucios == datos limpios');
+{
+  // La prueba de fondo: un estado con tipos mal puestos debe producir
+  // EXACTAMENTE el mismo recuento que el mismo estado bien escrito.
+  // Si normalizar cambiara algún número, estaría alterando el material.
+  const limpio = {
+    event:{dayCutoff:'06:00'},
+    subboxes:[{letter:'A'},{letter:'F'}],
+    sbConfig:{fixedLines:[{sbLetter:'F',quantity:2}]},
+    mangueraSets:[{id:'A',label:'Sistema A'}],
+    artists:[
+      {id:1,nombre:'Uno',fecha:'2026-08-28',inicio:'20:00',mangueraSet:'A',reutilizable:false,
+       sbCajetines:{A:2},
+       channels:[
+         {subboxes:{A:'1'},micro:'SM58',di:'',pies:{C:true,A:false,P:false,R:false},premontado:false},
+         {subboxes:{A:'2'},micro:'DI J48',di:'ST',pies:{C:false,A:false,P:false,R:false},premontado:false},
+         {subboxes:{A:'3'},micro:'DI J48',di:'ST',pies:{C:false,A:false,P:false,R:false},premontado:false},
+         {subboxes:{F:'1'},micro:'SM57',di:'',pies:{C:false,A:true,P:false,R:false},premontado:false},
+       ]},
+      {id:2,nombre:'Dos',fecha:'2026-08-28',inicio:'22:00',mangueraSet:'A',reutilizable:true,
+       sbCajetines:{A:1},
+       channels:[
+         {subboxes:{A:'1'},micro:'SM58',di:'',pies:{C:true,A:false,P:false,R:false},premontado:false},
+         {subboxes:{F:'2'},micro:'SM58',di:'',pies:{C:false,A:false,P:false,R:false},premontado:true},
+       ]},
+    ],
+  };
+
+  // El MISMO estado, escrito con todos los tipos mal: números por texto,
+  // minúsculas, booleanos como cadena, di en minúscula.
+  const sucio = {
+    event:{dayCutoff:'06:00'},
+    subboxes:[{letter:'a'},{letter:'f'}],
+    sbConfig:{fixedLines:[{sbLetter:'f',quantity:'2'}]},
+    mangueraSets:[{id:'A',label:'Sistema A'}],
+    artists:[
+      {id:1,nombre:'Uno',fecha:'2026-08-28',inicio:'20:00',mangueraSet:'A',reutilizable:'false',
+       sbCajetines:{a:'2'},
+       channels:[
+         {subboxes:{a:1},micro:'SM58',di:'',pies:{C:'true',A:'false',P:false,R:false},premontado:'false'},
+         {subboxes:{a:2},micro:'DI J48',di:'st',pies:{},premontado:0},
+         {subboxes:{a:3},micro:'DI J48',di:'St',pies:{},premontado:0},
+         {subboxes:{f:1},micro:'SM57',di:'',pies:{A:1},premontado:0},
+       ]},
+      {id:2,nombre:'Dos',fecha:'2026-08-28',inicio:'22:00',mangueraSet:'A',reutilizable:'true',
+       sbCajetines:{a:1},
+       channels:[
+         {subboxes:{a:1},micro:'SM58',di:'',pies:{C:1},premontado:0},
+         {subboxes:{f:2},micro:'SM58',di:'',pies:{},premontado:'true'},
+       ]},
+    ],
+  };
+
+  const L = C.computeStats(C.normalizeState(limpio), C.normalizeState(limpio).artists);
+  const S_ = C.computeStats(C.normalizeState(sucio),  C.normalizeState(sucio).artists);
+
+  eq(S_.mics,       L.mics,       'micros: sucio da lo mismo que limpio');
+  eq(S_.pies,       L.pies,       'pies: sucio da lo mismo que limpio');
+  eq(S_.di,         L.di,         'DIs: sucio da lo mismo que limpio');
+  eq(S_.mangueras,  L.mangueras,  'mangueras: sucio da lo mismo que limpio');
+  eq(S_.cajetines,  L.cajetines,  'cajetines: sucio da lo mismo que limpio');
+  eq(S_.cables,     L.cables,     'cables link: sucio da lo mismo que limpio');
+  eq(S_.totals,     L.totals,     'totales: sucio da lo mismo que limpio');
+
+  // Y que los valores no sean triviales (si todo fuera 0, el test no probaría nada)
+  eq(L.totals.mics > 0 && L.totals.mangueras > 0, true, 'el caso de prueba no está vacío');
+
+  // Normalizar dos veces no cambia nada (idempotencia)
+  eq(C.normalizeState(C.normalizeState(sucio)), C.normalizeState(sucio),
+     'normalizar es idempotente');
+}
+
 group('Robustez ante datos mal tipados');
 {
   // Un JSON importado puede traer el conector como número en vez de texto.

@@ -58,6 +58,115 @@
     return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
   }
 
+
+  // ═══════════════════════════════════════════════════════════════════
+  // NORMALIZACIÓN DE TIPOS
+  // ═══════════════════════════════════════════════════════════════════
+  // Los datos entran por muchas vías (JSON local, Drive, servidor, localStorage,
+  // deshacer/rehacer, importación de riders, tests) y no todas garantizan los
+  // tipos. Un conector como número reventaba los .trim(); peor aún, un id de
+  // sistema como número hacía que dos bandas del mismo sistema contaran como
+  // dos mangueras distintas — un error de cifras, silencioso.
+  //
+  // Normalizar NO es migrar: migrar rellena campos que faltan y actualiza
+  // formatos antiguos; esto solo corrige tipos. Se ejecuta DESPUÉS de migrar.
+
+  const asText = v => (v === null || v === undefined) ? '' : String(v).trim();
+  /** Acepta true, 'true', 1 y '1' como verdadero; todo lo demás es falso.
+   *  Sin esto, un JSON con {C:'false'} contaba un pie: 'false' es truthy. */
+  const asBool = v => v === true || v === 'true' || v === 1 || v === '1';
+
+  function normalizeChannel(ch){
+    const out = { ...(ch || {}) };
+    out.instrumento = asText(out.instrumento);
+    out.canalStage  = asText(out.canalStage);
+    out.micro       = asText(out.micro);
+    out.obs         = asText(out.obs);
+    out.diLink      = asText(out.diLink);
+
+    const di = asText(out.di).toUpperCase();
+    out.di = (di === 'ST' || di === 'M') ? di : '';
+
+    out.phantom     = asBool(out.phantom);
+    out.premontado  = asBool(out.premontado);
+
+    const pies = {};
+    for (const k of PIE_KEYS) pies[k] = asBool(out.pies && out.pies[k]);
+    out.pies = pies;
+
+    // Las claves de subboxes se pasan a mayúsculas a la vez que las letras de
+    // S.subboxes: si solo se tocara un lado, dejarían de casar y se perderían
+    // todas las asignaciones de conectores.
+    const sb = {};
+    if (out.subboxes && typeof out.subboxes === 'object') {
+      for (const k in out.subboxes) sb[asText(k).toUpperCase()] = asText(out.subboxes[k]);
+    }
+    out.subboxes = sb;
+    return out;
+  }
+
+  function normalizeArtist(a){
+    const out = { ...(a || {}) };
+    out.nombre       = asText(out.nombre);
+    out.mangueraSet  = asText(out.mangueraSet) || 'propio';
+    out.reutilizable = asBool(out.reutilizable);
+    out.escenarioId  = asText(out.escenarioId);
+
+    const caj = {};
+    if (out.sbCajetines && typeof out.sbCajetines === 'object') {
+      for (const k in out.sbCajetines) {
+        caj[asText(k).toUpperCase()] = clamp(parseInt(out.sbCajetines[k], 10) || 1, 1, MAX_CAJETINES);
+      }
+    }
+    out.sbCajetines = caj;
+
+    const names = {};
+    if (out.sbCajetinesNames && typeof out.sbCajetinesNames === 'object') {
+      for (const k in out.sbCajetinesNames) {
+        const v = out.sbCajetinesNames[k];
+        names[asText(k).toUpperCase()] = Array.isArray(v) ? v.map(asText) : [];
+      }
+    }
+    out.sbCajetinesNames = names;
+
+    out.channels = Array.isArray(out.channels) ? out.channels.map(normalizeChannel) : [];
+    return out;
+  }
+
+  /** Normaliza el estado completo. Devuelve un objeto nuevo; no muta el original. */
+  function normalizeState(state){
+    const s = { ...(state || {}) };
+
+    s.subboxes = Array.isArray(s.subboxes)
+      ? s.subboxes.map(sb => ({ ...sb, letter: asText(sb.letter).toUpperCase() }))
+      : [];
+
+    s.mangueraSets = Array.isArray(s.mangueraSets)
+      ? s.mangueraSets.map(m => ({ ...m, id: asText(m.id), label: asText(m.label) }))
+      : [];
+
+    s.escenarios = Array.isArray(s.escenarios)
+      ? s.escenarios.map(e => ({ ...e, id: asText(e.id), nombre: asText(e.nombre) }))
+      : [];
+
+    s.sbConfig = { ...(s.sbConfig || {}) };
+    s.sbConfig.fixedLines = Array.isArray(s.sbConfig.fixedLines)
+      ? s.sbConfig.fixedLines.map(l => ({
+          ...l,
+          sbLetter: asText(l.sbLetter).toUpperCase(),
+          quantity: Math.max(1, parseInt(l.quantity, 10) || 1),
+        }))
+      : [];
+
+    s.event = { ...(s.event || {}) };
+    s.event.dayCutoff = /^\d{1,2}:\d{2}$/.test(asText(s.event.dayCutoff))
+      ? asText(s.event.dayCutoff) : DEFAULT_CUTOFF;
+    s.event.callMins = clamp(parseInt(s.event.callMins, 10) || 15, 1, 120);
+
+    s.artists = Array.isArray(s.artists) ? s.artists.map(normalizeArtist) : [];
+    return s;
+  }
+
   // ═══════════════════════════════════════════════════════════════════
   // CALENDARIO DE FESTIVAL
   // ═══════════════════════════════════════════════════════════════════
@@ -209,7 +318,8 @@
   // ═══════════════════════════════════════════════════════════════════
 
   const fixedLineFor = (state, letter) =>
-    (state.sbConfig?.fixedLines || []).find(l => l.sbLetter === letter) || null;
+    (state.sbConfig?.fixedLines || [])
+      .find(l => String(l.sbLetter).toUpperCase() === String(letter).toUpperCase()) || null;
 
   /**
    * Sistema al que pertenece un artista. Los que están en "propio" (o apuntan a
@@ -417,6 +527,8 @@
     PROPIO, PIE_KEYS,
     // calendario
     cutoffMins, festivalDateOf, groupByFestivalDate,
+    // normalización
+    normalizeChannel, normalizeArtist, normalizeState,
     // canales
     isPropio, isXLR, stereoFollowers, stereoDiBoxes, micsOf, piesOf,
     // reglas
