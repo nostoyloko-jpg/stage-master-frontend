@@ -5260,81 +5260,27 @@ function renderOrden(){
 let _summaryActiveTab='all';
 
 // Compute per-artist counts of mics, pies, cajetines (raw names, no normalization)
+/**
+ * Adaptador: Resumen material sobre el dominio.
+ *
+ * Las reglas de recuento (exclusiones, reutilizable, mangueras por sistema,
+ * fijas una sola vez, cajetines, cables) viven en SMCore.computeStats. Aquí
+ * solo se traduce la forma del resultado a los nombres que ya usan las vistas,
+ * para no tener que tocarlas.
+ *
+ * Sin normalizador: el Resumen material muestra los nombres de micro tal como
+ * están escritos en la CH list. El que agrupa variantes es Load Out.
+ */
 function computeSummaryFor(artists){
-  const fixedArt=artists.filter(a=>!a.reutilizable);
-  const reuseArt=artists.filter(a=>a.reutilizable);
-  function countMics(a){
-    const m={};
-    const shared=stereoSharedGearIdx(a);
-    a.channels.forEach((ch,i)=>{
-      if(ch.premontado)return;
-      if(shared.has(i))return; // par estéreo: una sola caja para L+R
-      if(ch.micro&&!isMicroPropio(ch.micro)&&!isXLROnly(ch.micro)) m[ch.micro]=(m[ch.micro]||0)+1;
-    });
-    return m;
-  }
-  // Regla ♻: un artista NO reutilizable necesita su propio material (se suma). Los artistas
-  // marcados como reutilizables comparten un mismo juego entre ellos —el set del primero se
-  // recoge y se remonta para el siguiente—, así que entre ellos basta con el MAYOR.
-  //   Total = suma(no reutilizables) + máx(reutilizables)
-  const micCounts={};
-  fixedArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{micCounts[k]=(micCounts[k]||0)+n;});});
-  const reuseMics={};
-  reuseArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{reuseMics[k]=Math.max(reuseMics[k]||0,n);});});
-  Object.entries(reuseMics).forEach(([k,n])=>{micCounts[k]=(micCounts[k]||0)+n;});
-
-  const piesCounts={C:0,A:0,P:0,R:0};
-  PIE_DEFS.forEach(p=>{
-    const cnt=a=>a.channels.filter(ch=>ch.pies?.[p.key]).length;
-    piesCounts[p.key]=fixedArt.reduce((s,a)=>s+cnt(a),0)+Math.max(0,...reuseArt.map(cnt),0);
-  });
-  const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
-  const configuredSetIds=new Set((S.mangueraSets||[]).map(s=>s.id));
-  // Resolve which "system" an artist belongs to. Artists on 'propio' (or on a set that no
-  // longer exists) are their own single-artist system.
-  const systemKeyOf=a=>{
-    const setId=a.mangueraSet||'propio';
-    return (setId==='propio'||!configuredSetIds.has(setId)) ? ('propio-'+a.id) : ('set-'+setId);
+  const s = SMCore.computeStats(S, artists);
+  return {
+    micCounts:             s.mics,
+    piesCounts:            s.pies,
+    mangueraCountByLetter: s.mangueras,
+    cajetinesByLetter:     s.cajetines,
+    linkCablesByLetter:    s.cables,
+    systemsByLetter:       s.systems,
   };
-  // Mangueras VARIABLES se comparten dentro de un sistema: dos bandas en Sistema A tiran de la
-  // misma manguera física → 1 por sistema que la use.
-  // Mangueras FIJAS (frontal, sidefill...) quedan fuera de los sistemas: se montan una sola vez
-  // para todo el festival → 1 en total, sin importar cuántos sistemas o bandas las usen.
-  // Cajetines son cajas físicas que cada banda monta → por artista, con la regla reutilizable.
-  const mangueraCountByLetter={},cajetinesByLetter={},linkCablesByLetter={},systemsByLetter={};
-  S.subboxes.forEach(sb=>{
-    const letter=sb.letter;
-    const usesLetter=a=>a.channels.some(ch=>(ch.subboxes?.[letter]||'').trim());
-    const artistsUsing=artists.filter(usesLetter);
-    if(!artistsUsing.length)return;
-
-    const isFixed=fixedLetters.has(letter);
-    if(isFixed){
-      mangueraCountByLetter[letter]=1;
-      systemsByLetter[letter]=null; // fuera del esquema de sistemas
-    } else {
-      const usedSystems=new Set(artistsUsing.map(systemKeyOf));
-      mangueraCountByLetter[letter]=usedSystems.size;
-      systemsByLetter[letter]=usedSystems;
-    }
-
-    const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
-    if(fixedLine){
-      // Línea fija: su juego de cajetines y cables se monta una sola vez para todo el festival.
-      const qty=fixedLine.quantity||1;
-      cajetinesByLetter[letter]=qty;
-      if(qty>1) linkCablesByLetter[letter]=qty-1;
-    } else {
-      const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
-      const nonReuse=artistsUsing.filter(a=>!a.reutilizable);
-      const reuse=artistsUsing.filter(a=>a.reutilizable);
-      cajetinesByLetter[letter]=nonReuse.reduce((s,a)=>s+cajFor(a),0)+Math.max(0,...reuse.map(cajFor));
-      const cabFor=a=>Math.max(0,cajFor(a)-1);
-      const cabTotal=nonReuse.reduce((s,a)=>s+cabFor(a),0)+Math.max(0,...reuse.map(cabFor));
-      if(cabTotal>0) linkCablesByLetter[letter]=cabTotal;
-    }
-  });
-  return {micCounts,piesCounts,mangueraCountByLetter,cajetinesByLetter,linkCablesByLetter,systemsByLetter};
 }
 
 function renderSummary(){
@@ -6158,114 +6104,53 @@ function renderSubboxSVG(sb, slots, ownerArtistId){
 // ── LOAD OUT ──────────────────────────────────────────────────────────
 // Compute all counts (mics, DIs, pies, mangueras, cajetines) for a given subset of artists.
 // Returns {micCount, diM, diST, piC, piA, piP, piR, sbCount, cajetinesByLetter}.
+/**
+ * Adaptador: Load Out sobre el dominio.
+ *
+ * A diferencia del Resumen material, aquí SÍ se normalizan los nombres de los
+ * micros: Load Out es la lista con la que se prepara el material, así que
+ * "sm58" y "SM 58" deben contar como el mismo modelo.
+ *
+ * Se mantienen los nombres de campo antiguos (micCount, diM, sbCount...) para
+ * no tener que tocar las vistas que ya los consumen.
+ */
 function computeLoadStats(artists){
-  // Artists whose gear is struck and re-rigged for the next band share the same stock within a day,
-  // so their needs combine with MAX. Artists whose gear stays up all day need their own units → SUM.
-  const fixedArt=artists.filter(a=>!a.reutilizable);
-  const reuseArt=artists.filter(a=>a.reutilizable);
-
-  // Count one artist's channels into a {key:count} map, skipping "ya montado" channels.
-  function countMics(a){
-    const m={};
-    const shared=stereoSharedGearIdx(a);
-    a.channels.forEach((ch,i)=>{
-      if(ch.premontado)return;
-      if(shared.has(i))return; // par estéreo: una sola caja para L+R
-      if(ch.micro&&!isMicroPropio(ch.micro)){const k=normalizeGearName(cleanForPDF(ch.micro));if(k&&k!=='XLR')m[k]=(m[k]||0)+1;}
-    });
-    return m;
-  }
-  // Regla ♻ — ver computeSummaryFor: suma(no reutilizables) + máx(reutilizables).
-  const micCount={};
-  fixedArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{micCount[k]=(micCount[k]||0)+n;});});
-  const reuseMics={};
-  reuseArt.forEach(a=>{const m=countMics(a);Object.entries(m).forEach(([k,n])=>{reuseMics[k]=Math.max(reuseMics[k]||0,n);});});
-  Object.entries(reuseMics).forEach(([k,n])=>{micCount[k]=(micCount[k]||0)+n;});
-
-  function countDi(a,type){
-    if(type==='ST') return countStereoDiBoxes(a);
-    return a.channels.filter(ch=>ch.di===type).length;
-  }
-  const diM=fixedArt.reduce((s,a)=>s+countDi(a,"M"),0)+Math.max(0,...reuseArt.map(a=>countDi(a,"M")),0);
-  const diST=fixedArt.reduce((s,a)=>s+countDi(a,"ST"),0)+Math.max(0,...reuseArt.map(a=>countDi(a,"ST")),0);
-
-  function countPie(a,key){return a.channels.filter(ch=>ch.pies?.[key]).length;}
-  const piCalc=k=>fixedArt.reduce((s,a)=>s+countPie(a,k),0)+Math.max(0,...reuseArt.map(a=>countPie(a,k)),0);
-  const piC=piCalc('C'), piA=piCalc('A'), piP=piCalc('P'), piR=piCalc('R');
-  const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
-  const sbCount={},cajetinesByLetter={},linkCablesByLetter={};
-  S.subboxes.forEach(sb=>{
-    const letter=sb.letter;
-    const usesLetter=a=>a.channels.some(ch=>{const v=(ch.subboxes?.[letter]||'').trim();return v&&!isNaN(parseInt(v));});
-    if(fixedLetters.has(letter)){
-      // Manguera FIJA (frontal, sidefill...): fuera de los sistemas — se monta 1 sola vez
-      // para todo el festival, la usen los sistemas o bandas que la usen.
-      const artistsUsing=artists.filter(usesLetter);
-      if(artistsUsing.length){
-        sbCount[letter]=1;
-        const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
-        const qty=fixedLine?(fixedLine.quantity||1):1;
-        // Los cajetines y cables de una línea fija se montan UNA sola vez para todo el
-        // festival, igual que su manguera — no se multiplican por banda ni por sistema.
-        cajetinesByLetter[letter]=qty;
-        if(qty>1) linkCablesByLetter[letter]=qty-1;
-      }
-    } else {
-      // Manguera VARIABLE: compartida dentro de cada sistema → 1 por sistema que la use.
-      const artistsUsing=artists.filter(usesLetter);
-      if(artistsUsing.length){
-        const configuredSetIds2=new Set((S.mangueraSets||[]).map(s=>s.id));
-        const usedSystems=new Set(artistsUsing.map(a=>{
-          const setId=a.mangueraSet||'propio';
-          return (setId==='propio'||!configuredSetIds2.has(setId))?('propio-'+a.id):('set-'+setId);
-        }));
-        sbCount[letter]=usedSystems.size;
-        const nonReuse=artistsUsing.filter(a=>!a.reutilizable);
-        const reuse=artistsUsing.filter(a=>a.reutilizable);
-        const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
-        cajetinesByLetter[letter]=nonReuse.reduce((s,a)=>s+cajFor(a),0)+Math.max(0,...reuse.map(cajFor));
-        const cabFor=a=>Math.max(0,cajFor(a)-1);
-        const cabTotal=nonReuse.reduce((s,a)=>s+cabFor(a),0)+Math.max(0,...reuse.map(cabFor));
-        if(cabTotal>0) linkCablesByLetter[letter]=cabTotal;
-      }
-    }
+  const s = SMCore.computeStats(S, artists, {
+    normalize: n => normalizeGearName(cleanForPDF(n)),
   });
-  return {micCount,diM,diST,piC,piA,piP,piR,sbCount,cajetinesByLetter,linkCablesByLetter,fixedLetters};
+  return {
+    micCount:            s.mics,
+    diM:                 s.di.mono,
+    diST:                s.di.stereo,
+    piC: s.pies.C, piA: s.pies.A, piP: s.pies.P, piR: s.pies.R,
+    sbCount:             s.mangueras,
+    cajetinesByLetter:   s.cajetines,
+    linkCablesByLetter:  s.cables,
+    fixedLetters:        new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean)),
+    _core:               s,   // por si una vista necesita el resultado sin traducir
+  };
 }
 
-// Build the flat rows array from a stats object.
+/**
+ * Filas de la tabla de Load Out. El dominio las genera con una `key` estable
+ * (sin la cantidad dentro), que es lo que permite fusionar la misma fila entre
+ * días al calcular el máximo del festival.
+ */
 function buildLoadRows(stats){
-  function spare(n,rate){return Math.max(1,Math.ceil(n*rate));}
-  const rows=[];
-  Object.entries(stats.micCount).sort((a,b)=>b[1]-a[1]).forEach(([mic,n])=>{
-    const sp=spare(n,0.15);rows.push({cat:"MICRO",item:mic,need:n,spare:sp,total:n+sp});
-  });
-  // Las DI no se listan aparte: el modelo concreto (DI J48, Radial Pro D2, DI BSS...) va en la
-  // casilla de micrófono del canal y ya se cuenta arriba. Una fila genérica "DI Mono/Stereo"
-  // duplicaría ese material.
-  [{l:"Pie Corto",n:stats.piC},{l:"Pie Alto",n:stats.piA},{l:"Pie Pinza",n:stats.piP},{l:"Pie Recto",n:stats.piR}]
-    .filter(x=>x.n>0).forEach(({l,n})=>{
-      const sp=spare(n,0.25);rows.push({cat:"PIE",item:l,need:n,spare:sp,total:n+sp});
-    });
-  // Sort so all mangueras come first, then their link cables, then all cajetines.
-  const letters=Object.keys(stats.sbCount).sort((a,b)=>a.localeCompare(b));
-  letters.forEach(letter=>{
-    const n=stats.sbCount[letter];
-    const label=stats.fixedLetters.has(letter)?`Manguera ${letter} (fija)`:`Manguera ${letter}`;
-    rows.push({cat:"MANGUERA",item:label,need:n,spare:"—",total:n,key:`MANG_M_${letter}`});
-  });
-  letters.forEach(letter=>{
-    const cables=stats.linkCablesByLetter[letter]||0;
-    if(cables>0){
-      rows.push({cat:"CABLE LINK",item:`Cable link — Manguera ${letter}`,need:cables,spare:"—",total:cables,key:`CAB_${letter}`});
+  const core = stats._core || {
+    mics: stats.micCount, pies: {C:stats.piC,A:stats.piA,P:stats.piP,R:stats.piR},
+    mangueras: stats.sbCount, cajetines: stats.cajetinesByLetter, cables: stats.linkCablesByLetter,
+  };
+  const rows = SMCore.buildLoadOutRows(core);
+  // El dominio etiqueta las fijas por su letra; aquí se añade el matiz visual.
+  const fixed = stats.fixedLetters || new Set();
+  rows.forEach(r=>{
+    if(r.cat==='MANGUERA' && r.key){
+      const l=r.key.replace('MANG_','');
+      if(fixed.has(l)) r.item = `Manguera ${l} (fija)`;
     }
-  });
-  letters.forEach(letter=>{
-    const n=stats.sbCount[letter];
-    const cajetines=stats.cajetinesByLetter[letter]||0;
-    if(cajetines>0){
-      rows.push({cat:"CAJETIN",item:`Cajetines — Manguera ${letter} ×${cajetines}`,need:cajetines,spare:"—",total:cajetines,key:`CAJ_${letter}`});
-    }
+    // La cantidad también en el texto, como venía mostrándose hasta ahora.
+    if(r.cat==='CAJETIN' && r.key) r.item = `Cajetines — Manguera ${r.key.replace('CAJ_','')} ×${r.need}`;
   });
   return rows;
 }
@@ -12680,6 +12565,38 @@ window.smCheck=function(){
     cmp('Manguera '+l,  core.mangueras[l], (app.sbCount||{})[l]);
     cmp('Cajetines '+l, core.cajetines[l], (app.cajetinesByLetter||{})[l]);
     cmp('Cables '+l,    core.cables[l],    (app.linkCablesByLetter||{})[l]);
+  });
+
+  // Load Out: las filas deben salir completas, con key estable y sin categoría DI
+  // (el modelo de DI va en la casilla de micro y ya se cuenta ahí).
+  const loRows = buildLoadRows(computeLoadStats(S.artists));
+  cmp('loadout · filas sin key', loRows.filter(r=>!r.key).length, 0);
+  cmp('loadout · categoría DI duplicada', loRows.filter(r=>r.cat==='DI').length, 0);
+  cmp('loadout · keys repetidas', loRows.length - new Set(loRows.map(r=>r.key)).size, 0);
+
+  // Máximo del festival: cada fila debe ser >= la de cualquier día suelto.
+  const fm = SMCore.computeFestivalMax(S, {normalize:n=>normalizeGearName(cleanForPDF(n))});
+  fm.days.forEach(d=>{
+    Object.entries(d.stats.mics).forEach(([n,q])=>{
+      if(q > (fm.mics[n]||0)) difs.push({elemento:'máx festival · '+n, dominio:fm.mics[n]||0, app:q});
+    });
+  });
+
+  // Resumen material: el adaptador debe devolver exactamente lo que pinta la vista.
+  // Se comprueba día a día, que es como lo usan las pestañas.
+  SMCore.groupByFestivalDate(S, false).forEach(d=>{
+    const r = computeSummaryFor(d.artists);
+    const k = SMCore.computeStats(S, d.artists);
+    const dia = d.key==='__nodate__' ? 'sin fecha' : d.key;
+    new Set([...Object.keys(r.micCounts), ...Object.keys(k.mics)]).forEach(n=>
+      cmp('resumen '+dia+' · '+n, r.micCounts[n], k.mics[n]));
+    SMCore.PIE_KEYS.forEach(pk=>
+      cmp('resumen '+dia+' · pie '+pk, r.piesCounts[pk], k.pies[pk]));
+    Object.keys(k.mangueras).forEach(l=>{
+      cmp('resumen '+dia+' · manguera '+l,  r.mangueraCountByLetter[l], k.mangueras[l]);
+      cmp('resumen '+dia+' · cajetines '+l, r.cajetinesByLetter[l],     k.cajetines[l]);
+      cmp('resumen '+dia+' · cables '+l,    r.linkCablesByLetter[l],    k.cables[l]);
+    });
   });
 
   // Badges: el helper compartido debe coincidir con el cálculo directo canal a canal.
