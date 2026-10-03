@@ -3930,6 +3930,545 @@ function openLiveWindow(mode){
   }, 1000);
 }
 
+/**
+ * Código de la ventana Live.
+ *
+ * Vive aquí como JavaScript de verdad, no como texto dentro de un template
+ * literal. Antes iba incrustado en la plantilla HTML y el template se comía
+ * los escapes: un `\'` mal puesto dejó la ventana en blanco sin ningún aviso.
+ * Ahora el navegador y las comprobaciones de sintaxis lo validan como el resto
+ * del archivo.
+ *
+ * Se envía a la ventana con toString(); los datos llegan por `window.__LIVE__`.
+ */
+function liveWindowScript(){
+  const D = window.__LIVE__;
+
+  const ACCENT=D.accent;
+  // Minutos visibles en las barras. Ajustable con los botones de zoom (esquina inf. derecha).
+  const ZOOM_STEPS=[20,30,45,60,90,120,180,240,360];
+  let _zIdx=(()=>{try{const v=parseInt(localStorage.getItem('smlive.zoom'));return (v>=0&&v<ZOOM_STEPS.length)?v:3;}catch(e){return 3;}})();
+  let VISIBLE=ZOOM_STEPS[_zIdx];
+  function zoomLbl(){const m=VISIBLE;return m<90?(m+' min'):(Math.floor(m/60)+'h'+(m%60?' '+(m%60)+'m':''));}
+  function setZoom(d){
+    _zIdx=Math.max(0,Math.min(ZOOM_STEPS.length-1,_zIdx+d));
+    VISIBLE=ZOOM_STEPS[_zIdx];
+    try{localStorage.setItem('smlive.zoom',String(_zIdx));}catch(e){}
+    const l=document.getElementById('zlbl');if(l)l.textContent=zoomLbl();
+    const mi=document.getElementById('zmin'),ma=document.getElementById('zmax');
+    if(mi)mi.disabled=_zIdx>=ZOOM_STEPS.length-1;
+    if(ma)ma.disabled=_zIdx<=0;
+    requestAnimationFrame(redraw);
+  }
+  const NX=64;      // px from left where needle sits
+
+  let BLOCKS=D.blocks;
+  const CALL_DONE=new Set();
+  function callKey(b){ return b.name+'@'+b.si; }
+  function dismissCall(k){ CALL_DONE.add(k); requestAnimationFrame(()=>tick()); }
+  document.addEventListener('click',function(e){
+    const btn=e.target.closest && e.target.closest('.callok');
+    if(btn && btn.dataset.ck) dismissCall(btn.dataset.ck);
+  });
+  const CALL_MINS=D.callMins;
+
+  // "Ahora" en la MISMA escala absoluta que block.si/sf (minutos desde 2000-01-01).
+  // Sin esto, un show de madrugada (01:50 de mañana) se colapsaba a "hora del día" y acababa
+  // dibujándose dentro de la ventana de hoy.
+  function nowAbs(){
+    const d=new Date();
+    const days=Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate())-new Date(2000,0,1))/864e5);
+    return days*1440 + d.getHours()*60 + d.getMinutes() + d.getSeconds()/60;
+  }
+  function fmtM(m){const hh=Math.floor(((m%1440)+1440)%1440/60),mm=((m%60)+60)%60;return String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0');}
+
+  // Find cur/nxt from BLOCKS given nowMins
+  function findCurNxt(nowMins){
+    let cur=null,nxt=null;
+    for(let i=0;i<BLOCKS.length;i++){
+      const b=BLOCKS[i];
+      if(b.si===null)continue;
+      // Absolutos: el cruce de medianoche ya viene resuelto en si/sf.
+      const sm=b.si, em=(b.sf!=null?b.sf:sm+60);
+      const active = nowMins>=sm && nowMins<em;
+      if(active){cur=b;if(i+1<BLOCKS.length)nxt=BLOCKS[i+1];break;}
+      else if(sm>nowMins&&!nxt){nxt=b;}
+    }
+    if(!cur&&!nxt&&BLOCKS.length>0)nxt=BLOCKS[0];
+    return{cur,nxt};
+  }
+
+  // Draw ONE strip showing a single event block with its own context
+  // The block is positioned according to its real time relative to "now"
+  function drawStrip(cvId, block, nowMins){
+    const cv=document.getElementById(cvId);
+    if(!cv)return;
+    const W=cv.offsetWidth, H=cv.offsetHeight;
+    if(!W||!H)return;
+    const dpr=devicePixelRatio||1;
+    cv.width=W*dpr; cv.height=H*dpr;
+    const ctx=cv.getContext('2d');
+    ctx.scale(dpr,dpr);
+    ctx.clearRect(0,0,W,H);
+
+    // pxM: pixels per minute so VISIBLE mins fill (W - NX) px
+    const pxM=(W-NX)/VISIBLE;
+
+    // nowMins is time-of-day (0-1440).
+    // block.si/sf may be absolute (multi-day) or time-of-day — normalise both to same space.
+    // Strategy: work entirely in time-of-day minutes (0-1439).
+    // leftMins = time-of-day at left edge
+    const leftMins = nowMins - NX/pxM;  // can go negative (before midnight)
+
+    // xOf: time-of-day minutes → pixel x
+    // leftMins = nowMins - NX/pxM, so xOf(nowMins) = NX ✓
+    function xOf(absM){
+      return (absM - leftMins) * pxM; // NX ya está incorporado en leftMins
+    }
+
+    // Normalise block si/sf to time-of-day (0-1439)
+
+    // --- Grid lines + time labels every 5 min ---
+    // Iterate over time-of-day range visible on screen
+    const startM = Math.ceil(leftMins/5)*5;
+    for(let mi=startM; mi<=leftMins+VISIBLE+5; mi+=5){
+      const x = xOf(mi);
+      if(x<-2||x>W+2) continue;
+      const i60=mi%60===0, i30=mi%30===0, i15=mi%15===0, i10=mi%10===0;
+      ctx.strokeStyle=i60?'rgba(255,255,255,.35)':i30?'rgba(255,255,255,.18)':i15?'rgba(255,255,255,.08)':'rgba(255,255,255,.03)';
+      ctx.lineWidth=i60?2:i30?1.2:0.8;
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+      if(i10){
+        const lbl=fmtM(mi);
+        ctx.fillStyle=i60?'#fff':i30?'rgba(255,255,255,.75)':'rgba(255,255,255,.45)';
+        ctx.font=(i60?'bold 16px':i30?'bold 13px':'11px')+' monospace';
+        ctx.fillText(lbl, x+5, i60?22:i30?18:14);
+      }
+    }
+
+    // --- Draw CALL marker if present ---
+    if(block&&block.call){
+      const callParts=block.call.split(':').map(Number);
+      if(callParts.length===2&&!isNaN(callParts[0])){
+        const dayStart=Math.floor(block.si/1440)*1440;
+        const cx=xOf(dayStart+callParts[0]*60+callParts[1]);
+        if(cx>0&&cx<W){
+          ctx.strokeStyle='rgba(255,179,71,0.6)';
+          ctx.lineWidth=1.5;
+          ctx.setLineDash([4,4]);
+          ctx.beginPath();ctx.moveTo(cx,0);ctx.lineTo(cx,H);ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle='rgba(255,179,71,0.9)';
+          ctx.font='bold 12px monospace';
+          ctx.fillText('CALL '+block.call, cx+4, H-8);
+        }
+      }
+    }
+
+    // --- Draw the SINGLE block for this strip ---
+    if(block&&block.si!==null&&block.sf!==null){
+      const x1=xOf(block.si);
+      const x2=xOf(block.sf);
+      const bh=H*0.52, by=(H-bh)/2;
+      const bx=x1, bw=x2-x1;
+
+      // Clipped block
+      ctx.save();
+      ctx.globalAlpha=0.92;
+      ctx.fillStyle=block.color;
+      const r=Math.min(10,bh/2);
+      ctx.beginPath();
+      if(ctx.roundRect)ctx.roundRect(bx,by,bw,bh,r);
+      else ctx.rect(bx,by,bw,bh);
+      ctx.fill();
+      ctx.globalAlpha=1;
+
+      // Name inside block
+      if(bw>50){
+        ctx.fillStyle='rgba(255,255,255,.95)';
+        ctx.font='bold 16px -apple-system,sans-serif';
+        ctx.textBaseline='middle';
+        ctx.beginPath();ctx.rect(Math.max(0,bx)+8,by,Math.min(W,bx+bw)-Math.max(0,bx)-16,bh);ctx.clip();
+        ctx.fillText(block.name.toUpperCase(),Math.max(bx,0)+12,by+bh/2);
+      }
+      ctx.restore();
+
+      // Duration label above block (right side)
+      if(block.si&&block.sf){
+        const dur=Math.max(0,Math.round(block.sf-block.si));
+        const rx=Math.min(W-6,x2-2);
+        ctx.fillStyle='rgba(255,255,255,.35)';
+        ctx.font='11px monospace';
+        ctx.textAlign='right';
+        ctx.fillText(dur+' min',rx,by-4);
+        ctx.textAlign='left';
+      }
+    } else {
+      // No event — "sin evento" message
+      ctx.fillStyle='rgba(255,255,255,.12)';
+      ctx.font='14px -apple-system,sans-serif';
+      ctx.textBaseline='middle';
+      ctx.fillText('Sin evento',NX+16,H/2);
+    }
+
+    // --- Needle: at xOf(nowMins) = NX px from left ---
+    const needleX = xOf(nowMins);
+    ctx.strokeStyle=ACCENT;ctx.lineWidth=2.5;
+    ctx.shadowColor=ACCENT;ctx.shadowBlur=14;
+    ctx.beginPath();ctx.moveTo(needleX,0);ctx.lineTo(needleX,H);ctx.stroke();
+    ctx.shadowBlur=0;
+    ctx.fillStyle=ACCENT;
+    ctx.beginPath();ctx.arc(needleX,10,7,0,Math.PI*2);ctx.fill();
+  }
+
+  function setInfo(prefix,block){
+    const nm=document.getElementById('name-'+prefix);
+    const tm=document.getElementById('time-'+prefix);
+    const nt=document.getElementById('notes-'+prefix);
+    const cl=document.getElementById('call-'+prefix);
+    if(!block){
+      if(nm)nm.textContent='—';if(tm)tm.textContent='';
+      if(nt)nt.textContent='';if(cl)cl.textContent='';return;
+    }
+    if(nm)nm.textContent=block.name.toUpperCase();
+    // Time: show call first if available, then start–end
+    const timeStr = fmtM(block.si)+'–'+fmtM(block.sf);
+    // El escenario acompaña al horario, en el color que tiene asignado. Se usa innerHTML
+    // porque textContent no puede llevar color propio en parte del texto.
+    if(tm){
+      if(block.stage){
+        const sc=block.stageColor||block.color||'#888';
+        tm.innerHTML=timeStr+'&nbsp;&nbsp;&middot;&nbsp;&nbsp;<span style="color:'+sc+';font-weight:800;letter-spacing:1px">'+block.stage.toUpperCase()+'</span>';
+      } else {
+        tm.textContent=timeStr;
+      }
+    }
+    if(nt)nt.textContent=block.notes||'';
+    // Call time — shown prominently in yellow above time
+    const callVal = (block.call||'').trim();
+    if(cl){
+      cl.textContent = callVal ? '📞  CALL  '+callVal : '';
+      cl.style.display = callVal ? '' : 'none';
+    }
+  }
+
+  let _lastCurName='', _lastNxtName='';
+
+  // ── Strips dinámicas ────────────────────────────────────────────────
+  // El número de artistas visibles depende del alto libre bajo el reloj: al arrastrar el
+  // divisor hacia arriba cabe una barra más, y así sucesivamente según la pantalla.
+  const STRIP_MIN_H=110; // alto mínimo legible de una barra
+  // Alto individual de cada barra (índice → px). Vacío = reparto automático.
+  let STRIP_H=(()=>{try{return JSON.parse(localStorage.getItem('smlive.stripH')||'{}');}catch(e){return {};}})();
+  function saveStripH(){try{localStorage.setItem('smlive.stripH',JSON.stringify(STRIP_H));}catch(e){}}
+  let _stripCount=0;
+
+  function visibleCount(){
+    const bot=document.getElementById('bot');
+    const h=bot?bot.clientHeight:0;
+    return Math.max(1, Math.floor(h/STRIP_MIN_H));
+  }
+
+  function buildStrips(n){
+    const bot=document.getElementById('bot');
+    if(!bot)return;
+    bot.innerHTML='';
+    for(let i=0;i<n;i++){
+      const s=document.createElement('div');
+      s.className='strip';
+      const label = i===0 ? 'AHORA' : (i===1 ? 'SIGUIENTE' : 'EN '+(i)+'º LUGAR');
+      const col   = i===0 ? ACCENT : 'rgba(255,255,255,.3)';
+      s.innerHTML=
+        '<div class="info">'+
+          '<div class="lbl" style="color:'+col+'" id="lbl-'+i+'">'+label+'</div>'+
+          '<div class="aname" id="name-'+i+'">—</div>'+
+          '<div class="acall" id="call-'+i+'"></div>'+
+          '<div class="atime" id="time-'+i+'"></div>'+
+          '<div class="anotes" id="notes-'+i+'"></div>'+
+        '</div>'+
+        '<div class="drag-handle" onmousedown="startResize(event)" title="Arrastrar para cambiar ancho"></div>'+
+        '<div class="cvsw"><canvas id="cvs-'+i+'"></canvas></div>'+
+        '<div class="striph" data-si="'+i+'" title="Arrastra para ajustar el alto de esta fila"></div>';
+      // Alto individual: si el usuario lo ha fijado, se respeta; si no, reparto equitativo.
+      const savedH=STRIP_H[i];
+      if(savedH){ s.style.flex='0 0 '+savedH+'px'; } else { s.style.flex='1 1 0'; }
+      bot.appendChild(s);
+    }
+    // Arrastre del borde inferior de cada barra para ajustar su alto por separado.
+    bot.querySelectorAll('.striph').forEach(h=>{
+      h.onmousedown=(e)=>{
+        e.preventDefault();e.stopPropagation();
+        h.classList.add('active');
+        const idx=parseInt(h.dataset.si);
+        const strip=h.parentElement;
+        const startY=e.clientY, startH=strip.getBoundingClientRect().height;
+        function onMove(ev){
+          const nh=Math.max(60,startH+(ev.clientY-startY));
+          strip.style.flex='0 0 '+nh+'px';
+          STRIP_H[idx]=Math.round(nh);
+          requestAnimationFrame(redraw);
+        }
+        function onUp(){
+          h.classList.remove('active');
+          document.removeEventListener('mousemove',onMove);
+          document.removeEventListener('mouseup',onUp);
+          document.body.style.cursor='';
+          saveStripH();requestAnimationFrame(redraw);
+        }
+        document.addEventListener('mousemove',onMove);
+        document.addEventListener('mouseup',onUp);
+        document.body.style.cursor='ns-resize';
+      };
+      // Doble clic: vuelve al reparto automático de esa barra.
+      h.ondblclick=(e)=>{
+        e.preventDefault();e.stopPropagation();
+        const idx=parseInt(h.dataset.si);
+        delete STRIP_H[idx];saveStripH();
+        h.parentElement.style.flex='1 1 0';
+        requestAnimationFrame(redraw);
+      };
+    });
+    _stripCount=n;
+  }
+
+  // Devuelve los N bloques a mostrar: el actual (o el próximo si no hay ninguno sonando)
+  // y los que le siguen en orden.
+  function pickBlocks(nowMinsInt,n){
+    const{cur,nxt}=findCurNxt(nowMinsInt);
+    const startRef = cur || nxt;
+    let startIdx = startRef ? BLOCKS.indexOf(startRef) : -1;
+    const out=[];
+    for(let i=0;i<n;i++){
+      out.push(startIdx>=0 && startIdx+i<BLOCKS.length ? BLOCKS[startIdx+i] : null);
+    }
+    return {list:out, playing: !!cur};
+  }
+
+  function tick(){
+    const now=new Date();
+    const nowMins=nowAbs();          // absoluto, misma escala que block.si/sf
+    const nowMinsInt=Math.floor(nowMins);
+    document.getElementById('clk').textContent=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+    document.getElementById('dat').textContent=now.toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'}).toUpperCase();
+
+    const n=visibleCount();
+    if(n!==_stripCount) buildStrips(n);
+
+    const{list,playing}=pickBlocks(nowMinsInt,n);
+    list.forEach((b,i)=>{
+      setInfo(i,b);
+      const lbl=document.getElementById('lbl-'+i);
+      if(lbl) lbl.textContent = (i===0 && !playing) ? 'SIGUIENTE' : (i===0?'AHORA':(i===1?'SIGUIENTE':'EN '+i+'º LUGAR'));
+      drawStrip('cvs-'+i,b,nowMins);
+    });
+
+    renderTopPanels(nowMinsInt);
+  }
+
+  // ── Paneles "En escena" / "Siguiente" ────────────────────────────────
+  // Con varios escenarios puede haber más de un grupo tocando a la vez, así que ambos
+  // paneles muestran listas, no un único artista.
+  function renderTopPanels(nowMinsInt){
+    const playing=[], upcoming=[];
+    BLOCKS.forEach(b=>{
+      if(b.si===null||b.si===undefined)return;
+      const s=b.si, e=(b.sf!=null?b.sf:s+60); // absolutos: el cruce de medianoche ya está resuelto
+      if(nowMinsInt>=s && nowMinsInt<e) playing.push(b);
+      else if(s>nowMinsInt) upcoming.push(b);
+    });
+    // El "siguiente" de cada escenario: el más próximo por escenario, y si no hay
+    // escenarios definidos, simplemente los próximos por hora.
+    upcoming.sort((a,b)=>a.si-b.si);
+    const seen=new Set(), nextList=[];
+    upcoming.forEach(b=>{
+      const key=b.stage||'__none__';
+      if(seen.has(key))return;
+      seen.add(key);nextList.push(b);
+    });
+
+    function rowHtml(b,withRemaining){
+      const col=b.stageColor||b.color||'#888';
+      const s=b.si, e=(b.sf!=null?b.sf:s+60);
+      const times=fmtM(b.si)+'–'+fmtM(b.sf);
+      const stage=b.stage?('<span class="tstage" style="color:'+col+'">'+b.stage.toUpperCase()+'</span>'):'';
+      let extra='';
+      if(withRemaining){
+        const span=Math.max(1,e-s);
+        const done=Math.max(0,nowMinsInt-s);
+        const pct=Math.max(0,Math.min(100, span>0?(done/span*100):0));
+        const rem=Math.max(0,Math.round(span-done));
+        extra='<div class="trem" style="color:'+col+'">'+(rem>0?rem+' min restantes':'Finalizado')+'</div>'
+             + '<div class="tbar"><div style="width:'+pct+'%;background:'+col+'"></div></div>';
+      }
+      return '<div class="trow" style="--c:'+col+'">'
+        + '<div class="tname">'+b.name.toUpperCase()+'</div>'
+        + '<div class="tmeta">'+times+(stage?'   &middot;   '+stage:'')+'</div>'
+        + extra
+        + '</div>';
+    }
+
+    // ── CALL: artistas cuyo show empieza dentro de la ventana de aviso ──
+    // Aparecen parpadeando, con nombre y escenario en el color del escenario. Si no hay
+    // ninguno en ese margen, la celda queda vacía.
+    // El filtro es por margen restante, no por un instante exacto: si abres la ventana
+    // cuando ya quedan 5 min y el call está en 10, el aviso sigue apareciendo.
+    const callList=BLOCKS.filter(b=>{
+      if(b.si===null||b.si===undefined)return false;
+      const falta=b.si-nowMinsInt;
+      if(!(falta>0 && falta<=CALL_MINS))return false;
+      return !CALL_DONE.has(callKey(b)); // ya se le ha hecho el call
+    }).sort((a,b)=>a.si-b.si);
+    const callEl=document.getElementById('call-list');
+    const callPanel=document.getElementById('panel-call');
+    if(callEl){
+      if(callList.length){
+        callEl.innerHTML=callList.map(b=>{
+          const col=b.stageColor||b.color||'#ffb347';
+          const falta=Math.max(0,Math.round(b.si-nowMinsInt));
+          return '<div class="trow callrow" style="--c:'+col+'">'
+            + '<div class="callmain">'
+              + '<div class="tname" style="color:'+col+'">'+b.name.toUpperCase()+'</div>'
+              + (b.stage?'<div class="tmeta"><span class="tstage" style="color:'+col+'">'+b.stage.toUpperCase()+'</span></div>':'')
+              + '<div class="trem" style="color:'+col+'">en '+falta+' min &middot; '+fmtM(b.si)+'</div>'
+            + '</div>'
+            + '<button class="callok" data-ck="'+callKey(b).replace(/"/g,'&quot;')+'" title="Marcar como avisado">OK</button>'
+            + '</div>';
+        }).join('');
+      } else {
+        callEl.innerHTML='';
+      }
+    }
+    if(callPanel) callPanel.classList.toggle('hot', callList.length>0);
+
+    const nowEl=document.getElementById('now-list');
+    const nxtEl=document.getElementById('next-list');
+    if(nowEl) nowEl.innerHTML = playing.length ? playing.map(b=>rowHtml(b,true)).join('') : '<div class="tempty">—</div>';
+    if(nxtEl) nxtEl.innerHTML = nextList.length ? nextList.slice(0,4).map(b=>rowHtml(b,false)).join('') : '<div class="tempty">—</div>';
+  }
+
+  window.receiveUpdate=function(blocks){BLOCKS=blocks;tick();};
+  window.tickFromParent=function(){tick();};
+
+  // Arrastre horizontal: ancho del panel de info
+  function startResize(e){
+    e.preventDefault();
+    const handle=e.currentTarget;
+    handle.classList.add('active');
+    const startX=e.clientX;
+    const startW=parseInt(getComputedStyle(document.documentElement).getPropertyValue('--info-w'))||340;
+    function onMove(ev){
+      const newW=Math.max(120,Math.min(window.innerWidth*0.72,startW+(ev.clientX-startX)));
+      document.documentElement.style.setProperty('--info-w',newW+'px');
+      requestAnimationFrame(redraw);
+    }
+    function onUp(){
+      handle.classList.remove('active');
+      document.removeEventListener('mousemove',onMove);
+      document.removeEventListener('mouseup',onUp);
+      requestAnimationFrame(redraw);
+    }
+    document.addEventListener('mousemove',onMove);
+    document.addEventListener('mouseup',onUp);
+  }
+
+  // Arrastre vertical: al encoger el reloj caben más artistas
+  // Anchos ajustables de las tres celdas superiores (reloj | en escena | siguiente)
+  (function initTopCols(){
+    const clk=document.getElementById('clkbox');
+    const now=document.getElementById('panel-now');
+    const nxt=document.getElementById('panel-next');
+    if(!clk||!now||!nxt)return;
+    const saved=localStorage.getItem('smlive.topCols');
+    if(saved){try{
+      const w=JSON.parse(saved);
+      if(w.clk)clk.style.flex='0 0 '+w.clk+'px';
+      if(w.now)now.style.flex='0 0 '+w.now+'px';
+    }catch(e){}}
+    function save(){
+      try{localStorage.setItem('smlive.topCols',JSON.stringify({
+        clk:Math.round(clk.getBoundingClientRect().width),
+        now:Math.round(now.getBoundingClientRect().width)
+      }));}catch(e){}
+    }
+    document.querySelectorAll('.vsplit').forEach(sp=>{
+      sp.onmousedown=(e)=>{
+        e.preventDefault();
+        sp.classList.add('active');
+        const cal=document.getElementById('panel-call');
+        const which=sp.dataset.vs; // 0: reloj|escena, 1: escena|siguiente, 2: siguiente|call
+        const left = which==='0' ? clk : (which==='1' ? now : nxt);
+        const right= which==='0' ? now : (which==='1' ? nxt : cal);
+        if(!left||!right)return;
+        const startX=e.clientX;
+        const lw=left.getBoundingClientRect().width;
+        const rw=right.getBoundingClientRect().width;
+        function onMove(ev){
+          const d=ev.clientX-startX;
+          const nl=Math.max(120,lw+d), nr=Math.max(120,rw-d);
+          if(nl<=120||nr<=120)return;
+          left.style.flex='0 0 '+nl+'px';
+          if(which==='2') right.style.flex='1 1 0';
+          else right.style.flex='0 0 '+nr+'px';
+        }
+        function onUp(){
+          sp.classList.remove('active');
+          document.removeEventListener('mousemove',onMove);
+          document.removeEventListener('mouseup',onUp);
+          document.body.style.cursor='';
+          save();
+        }
+        document.addEventListener('mousemove',onMove);
+        document.addEventListener('mouseup',onUp);
+        document.body.style.cursor='col-resize';
+      };
+    });
+  })();
+
+  (function initVSplit(){
+    const sp=document.getElementById('hsplit');
+    if(!sp)return;
+    const saved=parseInt(localStorage.getItem('smlive.topH'));
+    if(saved>=90) document.documentElement.style.setProperty('--top-h',saved+'px');
+    sp.onmousedown=function(e){
+      e.preventDefault();
+      sp.classList.add('active');
+      const top=document.getElementById('top');
+      const startY=e.clientY, startH=top.getBoundingClientRect().height;
+      function onMove(ev){
+        const h=Math.max(90,Math.min(window.innerHeight-STRIP_MIN_H-20,startH+(ev.clientY-startY)));
+        document.documentElement.style.setProperty('--top-h',h+'px');
+        try{localStorage.setItem('smlive.topH',String(Math.round(h)));}catch(err){}
+        requestAnimationFrame(tick);
+      }
+      function onUp(){
+        sp.classList.remove('active');
+        document.removeEventListener('mousemove',onMove);
+        document.removeEventListener('mouseup',onUp);
+        requestAnimationFrame(tick);
+      }
+      document.addEventListener('mousemove',onMove);
+      document.addEventListener('mouseup',onUp);
+    };
+  })();
+
+  function redraw(){
+    const nowMins=nowAbs();
+    const nowMinsInt=Math.floor(nowMins);
+    const{list}=pickBlocks(nowMinsInt,_stripCount||visibleCount());
+    list.forEach((b,i)=>drawStrip('cvs-'+i,b,nowMins));
+  }
+  setZoom(0);
+  setInterval(tick,1000);
+  tick();
+  window.addEventListener('resize',()=>requestAnimationFrame(tick));
+  // Invalidate Leaflet map on resize/orientation change so tiles render correctly on tablet
+  function _invalidateOrdenMap(){
+    try{ if(window._ordenMap) window._ordenMap.invalidateSize(); }catch(e){}
+  }
+  window.addEventListener('resize', ()=>{ setTimeout(_invalidateOrdenMap, 200); });
+  window.addEventListener('orientationchange', ()=>{ setTimeout(_invalidateOrdenMap, 400); });
+}
+
 function buildLiveWindow(){
   if(!_liveWin||_liveWin.closed)return;
   const mode=_liveWinMode, isSC=mode==='sc';
@@ -4050,529 +4589,10 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
   <button id="zmax" onclick="setZoom(-1)" title="Alejar (ver más tiempo)">&minus;</button>
 </div>
 <scr${""}ipt>
-const ACCENT='${accent}';
-// Minutos visibles en las barras. Ajustable con los botones de zoom (esquina inf. derecha).
-const ZOOM_STEPS=[20,30,45,60,90,120,180,240,360];
-let _zIdx=(()=>{try{const v=parseInt(localStorage.getItem('smlive.zoom'));return (v>=0&&v<ZOOM_STEPS.length)?v:3;}catch(e){return 3;}})();
-let VISIBLE=ZOOM_STEPS[_zIdx];
-function zoomLbl(){const m=VISIBLE;return m<90?(m+' min'):(Math.floor(m/60)+'h'+(m%60?' '+(m%60)+'m':''));}
-function setZoom(d){
-  _zIdx=Math.max(0,Math.min(ZOOM_STEPS.length-1,_zIdx+d));
-  VISIBLE=ZOOM_STEPS[_zIdx];
-  try{localStorage.setItem('smlive.zoom',String(_zIdx));}catch(e){}
-  const l=document.getElementById('zlbl');if(l)l.textContent=zoomLbl();
-  const mi=document.getElementById('zmin'),ma=document.getElementById('zmax');
-  if(mi)mi.disabled=_zIdx>=ZOOM_STEPS.length-1;
-  if(ma)ma.disabled=_zIdx<=0;
-  requestAnimationFrame(redraw);
-}
-const NX=64;      // px from left where needle sits
-
-let BLOCKS=${JSON.stringify(blocksData)};
-const CALL_DONE=new Set();
-function callKey(b){ return b.name+'@'+b.si; }
-function dismissCall(k){ CALL_DONE.add(k); requestAnimationFrame(()=>tick()); }
-document.addEventListener('click',function(e){
-  const btn=e.target.closest && e.target.closest('.callok');
-  if(btn && btn.dataset.ck) dismissCall(btn.dataset.ck);
-});
-const CALL_MINS=${JSON.stringify(S.event.callMins||15)};
-
-// "Ahora" en la MISMA escala absoluta que block.si/sf (minutos desde 2000-01-01).
-// Sin esto, un show de madrugada (01:50 de mañana) se colapsaba a "hora del día" y acababa
-// dibujándose dentro de la ventana de hoy.
-function nowAbs(){
-  const d=new Date();
-  const days=Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate())-new Date(2000,0,1))/864e5);
-  return days*1440 + d.getHours()*60 + d.getMinutes() + d.getSeconds()/60;
-}
-function fmtM(m){const hh=Math.floor(((m%1440)+1440)%1440/60),mm=((m%60)+60)%60;return String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0');}
-
-// Find cur/nxt from BLOCKS given nowMins
-function findCurNxt(nowMins){
-  let cur=null,nxt=null;
-  for(let i=0;i<BLOCKS.length;i++){
-    const b=BLOCKS[i];
-    if(b.si===null)continue;
-    // Absolutos: el cruce de medianoche ya viene resuelto en si/sf.
-    const sm=b.si, em=(b.sf!=null?b.sf:sm+60);
-    const active = nowMins>=sm && nowMins<em;
-    if(active){cur=b;if(i+1<BLOCKS.length)nxt=BLOCKS[i+1];break;}
-    else if(sm>nowMins&&!nxt){nxt=b;}
-  }
-  if(!cur&&!nxt&&BLOCKS.length>0)nxt=BLOCKS[0];
-  return{cur,nxt};
-}
-
-// Draw ONE strip showing a single event block with its own context
-// The block is positioned according to its real time relative to "now"
-function drawStrip(cvId, block, nowMins){
-  const cv=document.getElementById(cvId);
-  if(!cv)return;
-  const W=cv.offsetWidth, H=cv.offsetHeight;
-  if(!W||!H)return;
-  const dpr=devicePixelRatio||1;
-  cv.width=W*dpr; cv.height=H*dpr;
-  const ctx=cv.getContext('2d');
-  ctx.scale(dpr,dpr);
-  ctx.clearRect(0,0,W,H);
-
-  // pxM: pixels per minute so VISIBLE mins fill (W - NX) px
-  const pxM=(W-NX)/VISIBLE;
-
-  // nowMins is time-of-day (0-1440).
-  // block.si/sf may be absolute (multi-day) or time-of-day — normalise both to same space.
-  // Strategy: work entirely in time-of-day minutes (0-1439).
-  // leftMins = time-of-day at left edge
-  const leftMins = nowMins - NX/pxM;  // can go negative (before midnight)
-
-  // xOf: time-of-day minutes → pixel x
-  // leftMins = nowMins - NX/pxM, so xOf(nowMins) = NX ✓
-  function xOf(absM){
-    return (absM - leftMins) * pxM; // NX ya está incorporado en leftMins
-  }
-
-  // Normalise block si/sf to time-of-day (0-1439)
-
-  // --- Grid lines + time labels every 5 min ---
-  // Iterate over time-of-day range visible on screen
-  const startM = Math.ceil(leftMins/5)*5;
-  for(let mi=startM; mi<=leftMins+VISIBLE+5; mi+=5){
-    const x = xOf(mi);
-    if(x<-2||x>W+2) continue;
-    const i60=mi%60===0, i30=mi%30===0, i15=mi%15===0, i10=mi%10===0;
-    ctx.strokeStyle=i60?'rgba(255,255,255,.35)':i30?'rgba(255,255,255,.18)':i15?'rgba(255,255,255,.08)':'rgba(255,255,255,.03)';
-    ctx.lineWidth=i60?2:i30?1.2:0.8;
-    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
-    if(i10){
-      const lbl=fmtM(mi);
-      ctx.fillStyle=i60?'#fff':i30?'rgba(255,255,255,.75)':'rgba(255,255,255,.45)';
-      ctx.font=(i60?'bold 16px':i30?'bold 13px':'11px')+' monospace';
-      ctx.fillText(lbl, x+5, i60?22:i30?18:14);
-    }
-  }
-
-  // --- Draw CALL marker if present ---
-  if(block&&block.call){
-    const callParts=block.call.split(':').map(Number);
-    if(callParts.length===2&&!isNaN(callParts[0])){
-      const dayStart=Math.floor(block.si/1440)*1440;
-      const cx=xOf(dayStart+callParts[0]*60+callParts[1]);
-      if(cx>0&&cx<W){
-        ctx.strokeStyle='rgba(255,179,71,0.6)';
-        ctx.lineWidth=1.5;
-        ctx.setLineDash([4,4]);
-        ctx.beginPath();ctx.moveTo(cx,0);ctx.lineTo(cx,H);ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle='rgba(255,179,71,0.9)';
-        ctx.font='bold 12px monospace';
-        ctx.fillText('CALL '+block.call, cx+4, H-8);
-      }
-    }
-  }
-
-  // --- Draw the SINGLE block for this strip ---
-  if(block&&block.si!==null&&block.sf!==null){
-    const x1=xOf(block.si);
-    const x2=xOf(block.sf);
-    const bh=H*0.52, by=(H-bh)/2;
-    const bx=x1, bw=x2-x1;
-
-    // Clipped block
-    ctx.save();
-    ctx.globalAlpha=0.92;
-    ctx.fillStyle=block.color;
-    const r=Math.min(10,bh/2);
-    ctx.beginPath();
-    if(ctx.roundRect)ctx.roundRect(bx,by,bw,bh,r);
-    else ctx.rect(bx,by,bw,bh);
-    ctx.fill();
-    ctx.globalAlpha=1;
-
-    // Name inside block
-    if(bw>50){
-      ctx.fillStyle='rgba(255,255,255,.95)';
-      ctx.font='bold 16px -apple-system,sans-serif';
-      ctx.textBaseline='middle';
-      ctx.beginPath();ctx.rect(Math.max(0,bx)+8,by,Math.min(W,bx+bw)-Math.max(0,bx)-16,bh);ctx.clip();
-      ctx.fillText(block.name.toUpperCase(),Math.max(bx,0)+12,by+bh/2);
-    }
-    ctx.restore();
-
-    // Duration label above block (right side)
-    if(block.si&&block.sf){
-      const dur=Math.max(0,Math.round(block.sf-block.si));
-      const rx=Math.min(W-6,x2-2);
-      ctx.fillStyle='rgba(255,255,255,.35)';
-      ctx.font='11px monospace';
-      ctx.textAlign='right';
-      ctx.fillText(dur+' min',rx,by-4);
-      ctx.textAlign='left';
-    }
-  } else {
-    // No event — "sin evento" message
-    ctx.fillStyle='rgba(255,255,255,.12)';
-    ctx.font='14px -apple-system,sans-serif';
-    ctx.textBaseline='middle';
-    ctx.fillText('Sin evento',NX+16,H/2);
-  }
-
-  // --- Needle: at xOf(nowMins) = NX px from left ---
-  const needleX = xOf(nowMins);
-  ctx.strokeStyle=ACCENT;ctx.lineWidth=2.5;
-  ctx.shadowColor=ACCENT;ctx.shadowBlur=14;
-  ctx.beginPath();ctx.moveTo(needleX,0);ctx.lineTo(needleX,H);ctx.stroke();
-  ctx.shadowBlur=0;
-  ctx.fillStyle=ACCENT;
-  ctx.beginPath();ctx.arc(needleX,10,7,0,Math.PI*2);ctx.fill();
-}
-
-function setInfo(prefix,block){
-  const nm=document.getElementById('name-'+prefix);
-  const tm=document.getElementById('time-'+prefix);
-  const nt=document.getElementById('notes-'+prefix);
-  const cl=document.getElementById('call-'+prefix);
-  if(!block){
-    if(nm)nm.textContent='—';if(tm)tm.textContent='';
-    if(nt)nt.textContent='';if(cl)cl.textContent='';return;
-  }
-  if(nm)nm.textContent=block.name.toUpperCase();
-  // Time: show call first if available, then start–end
-  const timeStr = fmtM(block.si)+'–'+fmtM(block.sf);
-  // El escenario acompaña al horario, en el color que tiene asignado. Se usa innerHTML
-  // porque textContent no puede llevar color propio en parte del texto.
-  if(tm){
-    if(block.stage){
-      const sc=block.stageColor||block.color||'#888';
-      tm.innerHTML=timeStr+'&nbsp;&nbsp;&middot;&nbsp;&nbsp;<span style="color:'+sc+';font-weight:800;letter-spacing:1px">'+block.stage.toUpperCase()+'</span>';
-    } else {
-      tm.textContent=timeStr;
-    }
-  }
-  if(nt)nt.textContent=block.notes||'';
-  // Call time — shown prominently in yellow above time
-  const callVal = (block.call||'').trim();
-  if(cl){
-    cl.textContent = callVal ? '📞  CALL  '+callVal : '';
-    cl.style.display = callVal ? '' : 'none';
-  }
-}
-
-let _lastCurName='', _lastNxtName='';
-
-// ── Strips dinámicas ────────────────────────────────────────────────
-// El número de artistas visibles depende del alto libre bajo el reloj: al arrastrar el
-// divisor hacia arriba cabe una barra más, y así sucesivamente según la pantalla.
-const STRIP_MIN_H=110; // alto mínimo legible de una barra
-// Alto individual de cada barra (índice → px). Vacío = reparto automático.
-let STRIP_H=(()=>{try{return JSON.parse(localStorage.getItem('smlive.stripH')||'{}');}catch(e){return {};}})();
-function saveStripH(){try{localStorage.setItem('smlive.stripH',JSON.stringify(STRIP_H));}catch(e){}}
-let _stripCount=0;
-
-function visibleCount(){
-  const bot=document.getElementById('bot');
-  const h=bot?bot.clientHeight:0;
-  return Math.max(1, Math.floor(h/STRIP_MIN_H));
-}
-
-function buildStrips(n){
-  const bot=document.getElementById('bot');
-  if(!bot)return;
-  bot.innerHTML='';
-  for(let i=0;i<n;i++){
-    const s=document.createElement('div');
-    s.className='strip';
-    const label = i===0 ? 'AHORA' : (i===1 ? 'SIGUIENTE' : 'EN '+(i)+'º LUGAR');
-    const col   = i===0 ? ACCENT : 'rgba(255,255,255,.3)';
-    s.innerHTML=
-      '<div class="info">'+
-        '<div class="lbl" style="color:'+col+'" id="lbl-'+i+'">'+label+'</div>'+
-        '<div class="aname" id="name-'+i+'">—</div>'+
-        '<div class="acall" id="call-'+i+'"></div>'+
-        '<div class="atime" id="time-'+i+'"></div>'+
-        '<div class="anotes" id="notes-'+i+'"></div>'+
-      '</div>'+
-      '<div class="drag-handle" onmousedown="startResize(event)" title="Arrastrar para cambiar ancho"></div>'+
-      '<div class="cvsw"><canvas id="cvs-'+i+'"></canvas></div>'+
-      '<div class="striph" data-si="'+i+'" title="Arrastra para ajustar el alto de esta fila"></div>';
-    // Alto individual: si el usuario lo ha fijado, se respeta; si no, reparto equitativo.
-    const savedH=STRIP_H[i];
-    if(savedH){ s.style.flex='0 0 '+savedH+'px'; } else { s.style.flex='1 1 0'; }
-    bot.appendChild(s);
-  }
-  // Arrastre del borde inferior de cada barra para ajustar su alto por separado.
-  bot.querySelectorAll('.striph').forEach(h=>{
-    h.onmousedown=(e)=>{
-      e.preventDefault();e.stopPropagation();
-      h.classList.add('active');
-      const idx=parseInt(h.dataset.si);
-      const strip=h.parentElement;
-      const startY=e.clientY, startH=strip.getBoundingClientRect().height;
-      function onMove(ev){
-        const nh=Math.max(60,startH+(ev.clientY-startY));
-        strip.style.flex='0 0 '+nh+'px';
-        STRIP_H[idx]=Math.round(nh);
-        requestAnimationFrame(redraw);
-      }
-      function onUp(){
-        h.classList.remove('active');
-        document.removeEventListener('mousemove',onMove);
-        document.removeEventListener('mouseup',onUp);
-        document.body.style.cursor='';
-        saveStripH();requestAnimationFrame(redraw);
-      }
-      document.addEventListener('mousemove',onMove);
-      document.addEventListener('mouseup',onUp);
-      document.body.style.cursor='ns-resize';
-    };
-    // Doble clic: vuelve al reparto automático de esa barra.
-    h.ondblclick=(e)=>{
-      e.preventDefault();e.stopPropagation();
-      const idx=parseInt(h.dataset.si);
-      delete STRIP_H[idx];saveStripH();
-      h.parentElement.style.flex='1 1 0';
-      requestAnimationFrame(redraw);
-    };
-  });
-  _stripCount=n;
-}
-
-// Devuelve los N bloques a mostrar: el actual (o el próximo si no hay ninguno sonando)
-// y los que le siguen en orden.
-function pickBlocks(nowMinsInt,n){
-  const{cur,nxt}=findCurNxt(nowMinsInt);
-  const startRef = cur || nxt;
-  let startIdx = startRef ? BLOCKS.indexOf(startRef) : -1;
-  const out=[];
-  for(let i=0;i<n;i++){
-    out.push(startIdx>=0 && startIdx+i<BLOCKS.length ? BLOCKS[startIdx+i] : null);
-  }
-  return {list:out, playing: !!cur};
-}
-
-function tick(){
-  const now=new Date();
-  const nowMins=nowAbs();          // absoluto, misma escala que block.si/sf
-  const nowMinsInt=Math.floor(nowMins);
-  document.getElementById('clk').textContent=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
-  document.getElementById('dat').textContent=now.toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'}).toUpperCase();
-
-  const n=visibleCount();
-  if(n!==_stripCount) buildStrips(n);
-
-  const{list,playing}=pickBlocks(nowMinsInt,n);
-  list.forEach((b,i)=>{
-    setInfo(i,b);
-    const lbl=document.getElementById('lbl-'+i);
-    if(lbl) lbl.textContent = (i===0 && !playing) ? 'SIGUIENTE' : (i===0?'AHORA':(i===1?'SIGUIENTE':'EN '+i+'º LUGAR'));
-    drawStrip('cvs-'+i,b,nowMins);
-  });
-
-  renderTopPanels(nowMinsInt);
-}
-
-// ── Paneles "En escena" / "Siguiente" ────────────────────────────────
-// Con varios escenarios puede haber más de un grupo tocando a la vez, así que ambos
-// paneles muestran listas, no un único artista.
-function renderTopPanels(nowMinsInt){
-  const playing=[], upcoming=[];
-  BLOCKS.forEach(b=>{
-    if(b.si===null||b.si===undefined)return;
-    const s=b.si, e=(b.sf!=null?b.sf:s+60); // absolutos: el cruce de medianoche ya está resuelto
-    if(nowMinsInt>=s && nowMinsInt<e) playing.push(b);
-    else if(s>nowMinsInt) upcoming.push(b);
-  });
-  // El "siguiente" de cada escenario: el más próximo por escenario, y si no hay
-  // escenarios definidos, simplemente los próximos por hora.
-  upcoming.sort((a,b)=>a.si-b.si);
-  const seen=new Set(), nextList=[];
-  upcoming.forEach(b=>{
-    const key=b.stage||'__none__';
-    if(seen.has(key))return;
-    seen.add(key);nextList.push(b);
-  });
-
-  function rowHtml(b,withRemaining){
-    const col=b.stageColor||b.color||'#888';
-    const s=b.si, e=(b.sf!=null?b.sf:s+60);
-    const times=fmtM(b.si)+'–'+fmtM(b.sf);
-    const stage=b.stage?('<span class="tstage" style="color:'+col+'">'+b.stage.toUpperCase()+'</span>'):'';
-    let extra='';
-    if(withRemaining){
-      const span=Math.max(1,e-s);
-      const done=Math.max(0,nowMinsInt-s);
-      const pct=Math.max(0,Math.min(100, span>0?(done/span*100):0));
-      const rem=Math.max(0,Math.round(span-done));
-      extra='<div class="trem" style="color:'+col+'">'+(rem>0?rem+' min restantes':'Finalizado')+'</div>'
-           + '<div class="tbar"><div style="width:'+pct+'%;background:'+col+'"></div></div>';
-    }
-    return '<div class="trow" style="--c:'+col+'">'
-      + '<div class="tname">'+b.name.toUpperCase()+'</div>'
-      + '<div class="tmeta">'+times+(stage?'   &middot;   '+stage:'')+'</div>'
-      + extra
-      + '</div>';
-  }
-
-  // ── CALL: artistas cuyo show empieza dentro de la ventana de aviso ──
-  // Aparecen parpadeando, con nombre y escenario en el color del escenario. Si no hay
-  // ninguno en ese margen, la celda queda vacía.
-  // El filtro es por margen restante, no por un instante exacto: si abres la ventana
-  // cuando ya quedan 5 min y el call está en 10, el aviso sigue apareciendo.
-  const callList=BLOCKS.filter(b=>{
-    if(b.si===null||b.si===undefined)return false;
-    const falta=b.si-nowMinsInt;
-    if(!(falta>0 && falta<=CALL_MINS))return false;
-    return !CALL_DONE.has(callKey(b)); // ya se le ha hecho el call
-  }).sort((a,b)=>a.si-b.si);
-  const callEl=document.getElementById('call-list');
-  const callPanel=document.getElementById('panel-call');
-  if(callEl){
-    if(callList.length){
-      callEl.innerHTML=callList.map(b=>{
-        const col=b.stageColor||b.color||'#ffb347';
-        const falta=Math.max(0,Math.round(b.si-nowMinsInt));
-        return '<div class="trow callrow" style="--c:'+col+'">'
-          + '<div class="callmain">'
-            + '<div class="tname" style="color:'+col+'">'+b.name.toUpperCase()+'</div>'
-            + (b.stage?'<div class="tmeta"><span class="tstage" style="color:'+col+'">'+b.stage.toUpperCase()+'</span></div>':'')
-            + '<div class="trem" style="color:'+col+'">en '+falta+' min &middot; '+fmtM(b.si)+'</div>'
-          + '</div>'
-          + '<button class="callok" data-ck="'+callKey(b).replace(/"/g,'&quot;')+'" title="Marcar como avisado">OK</button>'
-          + '</div>';
-      }).join('');
-    } else {
-      callEl.innerHTML='';
-    }
-  }
-  if(callPanel) callPanel.classList.toggle('hot', callList.length>0);
-
-  const nowEl=document.getElementById('now-list');
-  const nxtEl=document.getElementById('next-list');
-  if(nowEl) nowEl.innerHTML = playing.length ? playing.map(b=>rowHtml(b,true)).join('') : '<div class="tempty">—</div>';
-  if(nxtEl) nxtEl.innerHTML = nextList.length ? nextList.slice(0,4).map(b=>rowHtml(b,false)).join('') : '<div class="tempty">—</div>';
-}
-
-window.receiveUpdate=function(blocks){BLOCKS=blocks;tick();};
-window.tickFromParent=function(){tick();};
-
-// Arrastre horizontal: ancho del panel de info
-function startResize(e){
-  e.preventDefault();
-  const handle=e.currentTarget;
-  handle.classList.add('active');
-  const startX=e.clientX;
-  const startW=parseInt(getComputedStyle(document.documentElement).getPropertyValue('--info-w'))||340;
-  function onMove(ev){
-    const newW=Math.max(120,Math.min(window.innerWidth*0.72,startW+(ev.clientX-startX)));
-    document.documentElement.style.setProperty('--info-w',newW+'px');
-    requestAnimationFrame(redraw);
-  }
-  function onUp(){
-    handle.classList.remove('active');
-    document.removeEventListener('mousemove',onMove);
-    document.removeEventListener('mouseup',onUp);
-    requestAnimationFrame(redraw);
-  }
-  document.addEventListener('mousemove',onMove);
-  document.addEventListener('mouseup',onUp);
-}
-
-// Arrastre vertical: al encoger el reloj caben más artistas
-// Anchos ajustables de las tres celdas superiores (reloj | en escena | siguiente)
-(function initTopCols(){
-  const clk=document.getElementById('clkbox');
-  const now=document.getElementById('panel-now');
-  const nxt=document.getElementById('panel-next');
-  if(!clk||!now||!nxt)return;
-  const saved=localStorage.getItem('smlive.topCols');
-  if(saved){try{
-    const w=JSON.parse(saved);
-    if(w.clk)clk.style.flex='0 0 '+w.clk+'px';
-    if(w.now)now.style.flex='0 0 '+w.now+'px';
-  }catch(e){}}
-  function save(){
-    try{localStorage.setItem('smlive.topCols',JSON.stringify({
-      clk:Math.round(clk.getBoundingClientRect().width),
-      now:Math.round(now.getBoundingClientRect().width)
-    }));}catch(e){}
-  }
-  document.querySelectorAll('.vsplit').forEach(sp=>{
-    sp.onmousedown=(e)=>{
-      e.preventDefault();
-      sp.classList.add('active');
-      const cal=document.getElementById('panel-call');
-      const which=sp.dataset.vs; // 0: reloj|escena, 1: escena|siguiente, 2: siguiente|call
-      const left = which==='0' ? clk : (which==='1' ? now : nxt);
-      const right= which==='0' ? now : (which==='1' ? nxt : cal);
-      if(!left||!right)return;
-      const startX=e.clientX;
-      const lw=left.getBoundingClientRect().width;
-      const rw=right.getBoundingClientRect().width;
-      function onMove(ev){
-        const d=ev.clientX-startX;
-        const nl=Math.max(120,lw+d), nr=Math.max(120,rw-d);
-        if(nl<=120||nr<=120)return;
-        left.style.flex='0 0 '+nl+'px';
-        if(which==='2') right.style.flex='1 1 0';
-        else right.style.flex='0 0 '+nr+'px';
-      }
-      function onUp(){
-        sp.classList.remove('active');
-        document.removeEventListener('mousemove',onMove);
-        document.removeEventListener('mouseup',onUp);
-        document.body.style.cursor='';
-        save();
-      }
-      document.addEventListener('mousemove',onMove);
-      document.addEventListener('mouseup',onUp);
-      document.body.style.cursor='col-resize';
-    };
-  });
-})();
-
-(function initVSplit(){
-  const sp=document.getElementById('hsplit');
-  if(!sp)return;
-  const saved=parseInt(localStorage.getItem('smlive.topH'));
-  if(saved>=90) document.documentElement.style.setProperty('--top-h',saved+'px');
-  sp.onmousedown=function(e){
-    e.preventDefault();
-    sp.classList.add('active');
-    const top=document.getElementById('top');
-    const startY=e.clientY, startH=top.getBoundingClientRect().height;
-    function onMove(ev){
-      const h=Math.max(90,Math.min(window.innerHeight-STRIP_MIN_H-20,startH+(ev.clientY-startY)));
-      document.documentElement.style.setProperty('--top-h',h+'px');
-      try{localStorage.setItem('smlive.topH',String(Math.round(h)));}catch(err){}
-      requestAnimationFrame(tick);
-    }
-    function onUp(){
-      sp.classList.remove('active');
-      document.removeEventListener('mousemove',onMove);
-      document.removeEventListener('mouseup',onUp);
-      requestAnimationFrame(tick);
-    }
-    document.addEventListener('mousemove',onMove);
-    document.addEventListener('mouseup',onUp);
-  };
-})();
-
-function redraw(){
-  const nowMins=nowAbs();
-  const nowMinsInt=Math.floor(nowMins);
-  const{list}=pickBlocks(nowMinsInt,_stripCount||visibleCount());
-  list.forEach((b,i)=>drawStrip('cvs-'+i,b,nowMins));
-}
-setZoom(0);
-setInterval(tick,1000);
-tick();
-window.addEventListener('resize',()=>requestAnimationFrame(tick));
-// Invalidate Leaflet map on resize/orientation change so tiles render correctly on tablet
-function _invalidateOrdenMap(){
-  try{ if(window._ordenMap) window._ordenMap.invalidateSize(); }catch(e){}
-}
-window.addEventListener('resize', ()=>{ setTimeout(_invalidateOrdenMap, 200); });
-window.addEventListener('orientationchange', ()=>{ setTimeout(_invalidateOrdenMap, 400); });
+// Datos que necesita la ventana. Lo único que se interpola: el resto del
+// código va aparte, en liveWindowScript(), como JavaScript real.
+window.__LIVE__ = ${JSON.stringify({blocks:blocksData, callMins:S.event.callMins||15, accent})};
+(${liveWindowScript.toString()})();
 <\/scr${""}ipt>
 </body></html>`;
 
