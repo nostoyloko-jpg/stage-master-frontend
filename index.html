@@ -5107,15 +5107,8 @@ function stereoSharedGearIdx(a){
 
 // Número de CAJAS de DI estéreo de un artista: los canales ST consecutivos forman un par
 // L/R que comparte una sola caja física. Un ST impar suelto cuenta 1 por sí mismo.
-function countStereoDiBoxes(a){
-  let boxes=0,pending=-1;
-  a.channels.forEach((ch,i)=>{
-    if(ch.di!=='ST')return;
-    if(pending>=0&&i===pending+1){pending=-1;return;}
-    boxes++;pending=i;
-  });
-  return boxes;
-}
+// countStereoDiBoxes eliminada: usar SMCore.stereoDiBoxes, que es la misma
+// regla que aplican Load Out, el Resumen material y los PDFs.
 
 /**
  * Recuentos por artista para los badges y el resumen de su CH list.
@@ -5417,7 +5410,7 @@ function renderSummary(){
     return s+a.channels.filter((c,i)=>c.micro&&!isLineInput(c.micro)&&!c.premontado&&!isMicroPropio(c.micro)&&!isXLROnly(c.micro)&&!shared.has(i)).length;
   },0);
   // Una DI estéreo L/R es una sola caja física — se emparejan los ST consecutivos.
-  const tD=artists.reduce((s,a)=>s+a.channels.filter(c=>c.di==='M').length+countStereoDiBoxes(a),0);
+  const tD=artists.reduce((s,a)=>s+a.channels.filter(c=>c.di==='M').length+SMCore.stereoDiBoxes(a),0);
   const tP=artists.reduce((s,a)=>s+a.channels.reduce((ss,c)=>ss+PIE_DEFS.filter(p=>c.pies?.[p.key]).length,0),0);
   document.getElementById('summary-stats').innerHTML=[[t('totalCanales'),tC],[t('totalMicros'),tM],[t('totalDIs'),tD],[t('totalPies'),tP],[t('artistas'),artists.length]]
     .map(([l,v])=>`<div class="stat-card"><div class="stat-label">${l}</div><div class="stat-value">${v}</div></div>`).join('');
@@ -9980,22 +9973,19 @@ async function runPdfExport(){
         pdf.setFont('helvetica','bold'); pdf.setFontSize(8); pdf.setTextColor(...ACCENT);
         pdf.text('MICRÓFONOS', M, 26);
         const micHead=['Micrófono', ...subset.map(a=>safe(a.nombre,12)), 'Total'];
-        const micMap={};
-        subset.forEach((a,ai)=>a.channels.forEach(ch=>{
-          if(!ch.micro)return;
-          const k=normalizeGearName(cleanForPDF(ch.micro));
-          if(k==='XLR'||isMicroPropio(ch.micro))return;
-          if(!micMap[k])micMap[k]={};
-          micMap[k][ai]=(micMap[k][ai]||0)+1;
-        }));
-        const micBody=Object.entries(micMap).sort((a,b)=>{
-          const ta=Object.values(a[1]).reduce((s,n)=>s+n,0), tb=Object.values(b[1]).reduce((s,n)=>s+n,0);
-          return tb-ta;
-        }).map(([nm,perArtist])=>{
-          const counts=subset.map((_,i)=>perArtist[i]||0);
-          const total=counts.reduce((s,n)=>s+n,0);
-          return total?[nm,...counts.map(n=>n||''),total]:null;
-        }).filter(Boolean);
+        // Columnas por artista con el dominio: así se respetan las exclusiones
+        // ("ya montado", propio, XLR) y el emparejado de DI estéreo, que esta
+        // tabla ignoraba. El Total aplica además la regla de reutilizable, de
+        // modo que coincide con el Resumen material en pantalla.
+        const _opts={normalize:n=>normalizeGearName(cleanForPDF(n))};
+        const perArtistMics=subset.map(a=>SMCore.micsOf(a,_opts));
+        const subsetTotals=SMCore.computeStats(S,subset,_opts).mics;
+        const micBody=Object.entries(subsetTotals)
+          .sort((a,b)=>b[1]-a[1])
+          .map(([nm,total])=>{
+            const counts=perArtistMics.map(m=>m[nm]||0);
+            return total?[nm,...counts.map(n=>n||''),total]:null;
+          }).filter(Boolean);
 
         let cursorY=28;
         if(micBody.length){
@@ -10015,9 +10005,10 @@ async function runPdfExport(){
           pdf.setFont('helvetica','bold'); pdf.setFontSize(8); pdf.setTextColor(...ACCENT);
           pdf.text('PIES DE MICRÓFONO', M, cursorY);
           const pieHead=['Pie', ...subset.map(a=>safe(a.nombre,12)), 'Total'];
+          const piesTotals=SMCore.computeStats(S,subset).pies;
           const pieBody=PIE_DEFS.map(p=>{
-            const counts=subset.map(a=>a.channels.filter(ch=>ch.pies?.[p.key]).length);
-            const total=counts.reduce((s,n)=>s+n,0);
+            const counts=subset.map(a=>SMCore.piesOf(a,p.key));
+            const total=piesTotals[p.key]||0;   // con la regla de reutilizable
             return total?[p.label,...counts.map(n=>n||''),total]:null;
           }).filter(Boolean);
           if(pieBody.length){
@@ -10042,7 +10033,8 @@ async function runPdfExport(){
             ['Canales',   ...subset.map(a=>a.channels.length), subset.reduce((s,a)=>s+a.channels.length,0)],
             ['Con micro', ...subset.map(a=>a.channels.filter(ch=>ch.micro).length), subset.reduce((s,a)=>s+a.channels.filter(ch=>ch.micro).length,0)],
             ['DI Mono',   ...subset.map(a=>a.channels.filter(ch=>ch.di==='M').length), subset.reduce((s,a)=>s+a.channels.filter(ch=>ch.di==='M').length,0)],
-            ['DI Stereo', ...subset.map(a=>countStereoDiBoxes(a)), subset.reduce((s,a)=>s+countStereoDiBoxes(a),0)],
+            // Tabla informativa: aquí SÍ se suma por artista (son canales, no material).
+            ['DI Stereo', ...subset.map(a=>SMCore.stereoDiBoxes(a)), subset.reduce((s,a)=>s+SMCore.stereoDiBoxes(a),0)],
             ['48V',       ...subset.map(a=>a.channels.filter(ch=>ch.phantom).length), subset.reduce((s,a)=>s+a.channels.filter(ch=>ch.phantom).length,0)],
           ];
           const totColStyles={0:{cellWidth:ROW_LABEL_W, fontStyle:'bold'}};
@@ -10640,7 +10632,7 @@ async function runPdfExport(){
         pdf.setFont('helvetica','normal'); pdf.setFontSize(6.5); pdf.setTextColor(...GRAY3);
         const mics=a.channels.filter(ch=>ch.micro).length;
         const diM=a.channels.filter(ch=>ch.di==='M').length;
-        const diST=countStereoDiBoxes(a);
+        const diST=SMCore.stereoDiBoxes(a);
         const ph2=a.channels.filter(ch=>ch.phantom).length;
         const piC=a.channels.filter(ch=>ch.pies?.C).length;
         const piA=a.channels.filter(ch=>ch.pies?.A).length;
@@ -12492,6 +12484,26 @@ window.smCheck=function(){
     cmp('Cajetines '+l, core.cajetines[l], (app.cajetinesByLetter||{})[l]);
     cmp('Cables '+l,    core.cables[l],    (app.linkCablesByLetter||{})[l]);
   });
+
+  // PDF de Resumen: sus columnas por artista deben respetar las mismas
+  // exclusiones que la pantalla (ya montado, propio, XLR, pares ST).
+  (function(){
+    const o={normalize:n=>normalizeGearName(cleanForPDF(n))};
+    SMCore.groupByFestivalDate(S,false).forEach(d=>{
+      const dia=d.key==='__nodate__'?'sin fecha':d.key;
+      const porArtista=d.artists.map(a=>SMCore.micsOf(a,o));
+      const totales=SMCore.computeStats(S,d.artists,o).mics;
+      Object.keys(totales).forEach(nm=>{
+        const suma=porArtista.reduce((s,m)=>s+(m[nm]||0),0);
+        const hayReut=d.artists.some(a=>a.reutilizable);
+        // Sin reutilizables, el total debe ser exactamente la suma de columnas.
+        if(!hayReut) cmp('PDF resumen '+dia+' · '+nm, totales[nm], suma);
+        // Con reutilizables, el total nunca puede superar la suma.
+        else if(totales[nm]>suma)
+          difs.push({elemento:'PDF resumen '+dia+' · '+nm, dominio:totales[nm], app:suma});
+      });
+    });
+  })();
 
   // Pantalla vs PDF: el PDF tenía su propio cálculo y contaba las mangueras
   // variables por artista en vez de por sistema. Ahora ambos salen del dominio,
