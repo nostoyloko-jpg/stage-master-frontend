@@ -4018,7 +4018,9 @@ function liveWindowScript(){
     // block.si/sf may be absolute (multi-day) or time-of-day — normalise both to same space.
     // Strategy: work entirely in time-of-day minutes (0-1439).
     // leftMins = time-of-day at left edge
-    const leftMins = nowMins - NX/pxM;  // can go negative (before midnight)
+    // TIME_OFFSET desplaza la vista en el tiempo sin tocar el reloj: permite
+    // adelantarse para ver lo que viene y volver luego con el botón ⟳.
+    const leftMins = (nowMins + TIME_OFFSET) - NX/pxM;
 
     // xOf: time-of-day minutes → pixel x
     // leftMins = nowMins - NX/pxM, so xOf(nowMins) = NX ✓
@@ -4348,11 +4350,53 @@ function liveWindowScript(){
 
   window.receiveUpdate=function(blocks){BLOCKS=blocks;tick();};
 
+function resetTimeOffset(){ setTimeOffset(0); }
+
+// Desplazamiento en el tiempo: arrastrar en horizontal sobre las barras, o
+// rueda del ratón. Es común a todas: se mueve la vista entera, no una barra.
+(function initTimeScroll(){
+  const bot=document.getElementById('bot');
+  if(!bot)return;
+
+  bot.addEventListener('mousedown',e=>{
+    // No secuestrar los tiradores de alto ni los botones.
+    if(e.target.closest('.striph, button, input')) return;
+    const startX=e.clientX, startOff=TIME_OFFSET;
+    let moved=false;
+    const pxM=()=>{
+      const cv=bot.querySelector('canvas');
+      return cv ? (cv.clientWidth/VISIBLE) : 10;
+    };
+    function onMove(ev){
+      const dx=ev.clientX-startX;
+      if(Math.abs(dx)>3){ moved=true; bot.classList.add('dragging'); }
+      setTimeOffset(startOff - dx/pxM());
+    }
+    function onUp(){
+      document.removeEventListener('mousemove',onMove);
+      document.removeEventListener('mouseup',onUp);
+      bot.classList.remove('dragging');
+    }
+    document.addEventListener('mousemove',onMove);
+    document.addEventListener('mouseup',onUp);
+  });
+
+  // Rueda: con Shift o en horizontal mueve el tiempo; en vertical, scroll normal.
+  bot.addEventListener('wheel',e=>{
+    const horiz = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
+    if(!horiz) return;              // deja pasar el scroll vertical
+    e.preventDefault();
+    const d = e.shiftKey ? e.deltaY : e.deltaX;
+    setTimeOffset(TIME_OFFSET + d * (VISIBLE/600));
+  },{passive:false});
+})();
+
   // El HTML de esta ventana llama a estos manejadores desde atributos onclick /
   // onmousedown, así que tienen que ser globales. Al pasar el código a una
   // función dejaron de serlo y los botones de zoom y el divisor de las barras
   // se quedaron muertos.
   window.setZoom      = setZoom;
+  window.resetTimeOffset = resetTimeOffset;
   window.startResize  = startResize;
   window.dismissCall  = dismissCall;
   window.tickFromParent=function(){tick();};
@@ -4513,25 +4557,31 @@ function buildLiveWindow(){
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:${bg};color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden;height:100vh;display:flex;flex-direction:column}
 #top{flex:0 0 var(--top-h,50vh);display:flex;align-items:stretch;gap:0;padding:14px 2vw;background:${bg2};border-bottom:2px solid ${accent};min-height:90px;overflow:hidden}
-.tpanel{flex:1 1 0;min-width:120px;min-width:0;display:flex;flex-direction:column;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:12px 16px;overflow:hidden}
-.tpanel-h{font-size:min(1.5vw,2vh);letter-spacing:4px;font-weight:800;text-transform:uppercase;margin-bottom:8px;flex-shrink:0}
+.tpanel{flex:1 1 0;min-width:110px;container-type:inline-size;min-width:0;display:flex;flex-direction:column;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:12px 16px;overflow:hidden}
+.tpanel-h{font-size:min(5cqw,2vh);letter-spacing:.25em;font-weight:800;text-transform:uppercase;margin-bottom:8px;flex-shrink:0}
 .tpanel-b{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:8px;justify-content:center}
-.tempty{font-size:min(3vw,4vh);font-weight:900;color:rgba(255,255,255,.2)}
+.tempty{font-size:min(10cqw,4vh);font-weight:900;color:rgba(255,255,255,.2)}
 .vsplit{flex:0 0 10px;cursor:col-resize;position:relative;transition:background .12s}
 .vsplit:hover,.vsplit.active{background:rgba(233,69,96,.5)}
 .vsplit::after{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:2px;height:28px;background:rgba(255,255,255,.2);border-radius:1px}
 .trow{border-left:4px solid var(--c,#888);padding-left:12px;min-width:0}
-.tname{font-size:min(3.2vw,4.4vh);font-weight:900;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tmeta{font-size:min(1.5vw,2vh);font-family:monospace;color:rgba(255,255,255,.55);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tname{font-size:min(11cqw,4.4vh);font-weight:900;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tmeta{font-size:min(5cqw,2vh);font-family:monospace;color:rgba(255,255,255,.55);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tstage{font-weight:800;letter-spacing:1px}
-.trem{font-size:min(1.6vw,2.1vh);font-family:monospace;font-weight:800;margin-top:3px}
+.trem{font-size:min(5.5cqw,2.1vh);font-family:monospace;font-weight:800;margin-top:3px}
 .tbar{height:4px;background:rgba(255,255,255,.1);border-radius:2px;margin-top:6px;overflow:hidden}
 .tbar>div{height:100%;border-radius:2px;transition:width 1s linear}
-#clkbox{flex:0 0 var(--w-clk,26%);min-width:150px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;padding-right:10px}
-#clk{font-size:min(8vw,13vh);font-weight:900;font-family:monospace;line-height:.9;letter-spacing:-2px}
-#dat{font-size:min(1.5vw,2vh);color:rgba(255,255,255,.35);letter-spacing:3px;text-transform:uppercase;margin-top:8px;font-weight:500;white-space:nowrap}
-#evn{font-size:min(1.6vw,2.1vh);font-weight:900;color:${accent};letter-spacing:2px;margin-top:8px;text-transform:uppercase;white-space:nowrap}
-#bot{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+/* El reloj se mide contra SU PROPIA celda (unidades cq*), no contra la ventana.
+   Con vw/vh el texto no encogia al estrechar la celda y se salia por encima de
+   las de al lado. El tope en vh evita que se desborde por altura. */
+#clkbox{flex:0 0 var(--w-clk,26%);min-width:110px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;padding-right:10px;container-type:inline-size;overflow:hidden}
+#clk{font-size:min(30cqw,13vh);font-weight:900;font-family:monospace;line-height:.9;letter-spacing:-2px;white-space:nowrap}
+#dat{font-size:min(5.5cqw,2vh);color:rgba(255,255,255,.35);letter-spacing:.2em;text-transform:uppercase;margin-top:8px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+#evn{font-size:min(6cqw,2.1vh);font-weight:900;color:${accent};letter-spacing:.15em;margin-top:8px;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+#bot{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;overflow-y:auto;overflow-x:hidden;cursor:grab}
+#bot.dragging{cursor:grabbing}
+#bot::-webkit-scrollbar{width:9px}
+#bot::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:5px}
 #hsplit{height:9px;flex-shrink:0;cursor:ns-resize;background:rgba(255,255,255,.05);position:relative;transition:background .15s}
 #hsplit:hover,#hsplit.active{background:rgba(233,69,96,.5)}
 #hsplit::after{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:36px;height:2px;background:rgba(255,255,255,.25);border-radius:1px}
@@ -4558,10 +4608,14 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 #zoomctl button:hover:not(:disabled){background:rgba(255,255,255,.18)}
 #zoomctl button:disabled{opacity:.3;cursor:default}
 #zlbl{font-size:11px;font-family:monospace;color:rgba(255,255,255,.7);min-width:52px;text-align:center}
+#offlbl{font-size:11px;font-family:monospace;color:#ffb347;min-width:0;text-align:center;font-weight:700}
+/* El botón de volver al presente solo destaca cuando la vista está desplazada. */
+#syncbtn{opacity:.35}
+#syncbtn.off{opacity:1;border-color:#ffb347;color:#ffb347;background:rgba(255,179,71,.18)}
 @keyframes callblink{0%,100%{opacity:1}50%{opacity:.25}}
 #panel-call .trow{animation:callblink 1.1s ease-in-out infinite;display:flex;align-items:center;gap:10px}
 #panel-call .callmain{flex:1;min-width:0}
-.callok{flex:0 0 auto;align-self:center;padding:8px 14px;border-radius:7px;border:1px solid rgba(255,179,71,.55);background:rgba(255,179,71,.16);color:#ffb347;font-size:min(1.3vw,1.8vh);font-weight:900;letter-spacing:1px;cursor:pointer;animation:none}
+.callok{flex:0 0 auto;align-self:center;padding:8px 14px;border-radius:7px;border:1px solid rgba(255,179,71,.55);background:rgba(255,179,71,.16);color:#ffb347;font-size:min(4.5cqw,1.8vh);font-weight:900;letter-spacing:1px;cursor:pointer;animation:none}
 .callok:hover{background:#ffb347;color:#111}
 #panel-call.hot{border-color:rgba(255,179,71,.6);box-shadow:0 0 0 1px rgba(255,179,71,.25) inset}
 </style></head><body>
@@ -4592,6 +4646,8 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 <div id="hsplit" title="Arrastra para ver más artistas"></div>
 <div id="bot"></div>
 <div id="zoomctl">
+  <button id="syncbtn" onclick="resetTimeOffset()" title="Volver al momento actual">&#8635;</button>
+  <span id="offlbl"></span>
   <button id="zmin" onclick="setZoom(1)" title="Acercar (ver menos tiempo)">+</button>
   <span id="zlbl"></span>
   <button id="zmax" onclick="setZoom(-1)" title="Alejar (ver más tiempo)">&minus;</button>
