@@ -4347,6 +4347,14 @@ function liveWindowScript(){
   }
 
   window.receiveUpdate=function(blocks){BLOCKS=blocks;tick();};
+
+  // El HTML de esta ventana llama a estos manejadores desde atributos onclick /
+  // onmousedown, así que tienen que ser globales. Al pasar el código a una
+  // función dejaron de serlo y los botones de zoom y el divisor de las barras
+  // se quedaron muertos.
+  window.setZoom      = setZoom;
+  window.startResize  = startResize;
+  window.dismissCall  = dismissCall;
   window.tickFromParent=function(){tick();};
 
   // Arrastre horizontal: ancho del panel de info
