@@ -3944,6 +3944,30 @@ function openLiveWindow(mode){
 function liveWindowScript(){
   const D = window.__LIVE__;
 
+  // Desplazamiento temporal de la vista, en minutos. 0 = ahora.
+  // Se mueve arrastrando sobre las barras o con la rueda; el botón de volver al
+  // presente lo pone a 0. El reloj y los paneles de arriba NO se ven afectados:
+  // siguen mostrando la hora real.
+  // Debe declararse aquí arriba: `let` no se eleva como las funciones, y
+  // drawStrip lo usa muy al principio.
+  let TIME_OFFSET = 0;
+  function setTimeOffset(mins){
+    TIME_OFFSET = mins;
+    const btn=document.getElementById('syncbtn');
+    if(btn) btn.classList.toggle('off', Math.abs(TIME_OFFSET) > 0.5);
+    const lbl=document.getElementById('offlbl');
+    if(lbl){
+      const m=Math.round(TIME_OFFSET);
+      const abs=Math.abs(m);
+      lbl.textContent = m===0 ? '' : (m>0?'+':'-') + (abs>=60
+        ? Math.floor(abs/60)+'h'+(abs%60?' '+(abs%60)+'m':'')
+        : abs+' min');
+    }
+    requestAnimationFrame(redraw);
+  }
+  function resetTimeOffset(){ setTimeOffset(0); }
+
+
   const ACCENT=D.accent;
   // Minutos visibles en las barras. Ajustable con los botones de zoom (esquina inf. derecha).
   const ZOOM_STEPS=[20,30,45,60,90,120,180,240,360];
@@ -4350,7 +4374,6 @@ function liveWindowScript(){
 
   window.receiveUpdate=function(blocks){BLOCKS=blocks;tick();};
 
-function resetTimeOffset(){ setTimeOffset(0); }
 
 // Desplazamiento en el tiempo: arrastrar en horizontal sobre las barras, o
 // rueda del ratón. Es común a todas: se mueve la vista entera, no una barra.
