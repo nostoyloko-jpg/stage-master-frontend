@@ -2443,7 +2443,7 @@ function nav(page,aid){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   const pm={config:'page-config',orden:'page-orden',summary:'page-summary',rchlist:'page-rchlist',sblist:'page-sblist',loadout:'page-loadout'};
   if(pm[page]){document.getElementById(pm[page]).classList.add('active');document.getElementById('nav-'+page)?.classList.add('active');}
-  else if(page==='artist'){document.getElementById('page-artist-'+aid)?.classList.add('active');document.getElementById('nav-artist-'+aid)?.classList.add('active');}
+  else if(page==='artist'){ensureArtistPage(aid);document.getElementById('page-artist-'+aid)?.classList.add('active');document.getElementById('nav-artist-'+aid)?.classList.add('active');}
   else if(page==='plan'){
     // Show plan page for this artist — reuse a single plan page
     let planPage=document.getElementById('page-plan');
@@ -2923,16 +2923,49 @@ function renderArtistNav(){
 }
 
 // ── ARTIST PAGES ──
+// ── Construcción de las CH lists bajo demanda ────────────────────────
+// Antes se reconstruían las páginas de TODOS los artistas en cada cambio, lo
+// que con 20 artistas y 900+ canales suponía ~72 ms cada vez que cambiabas de
+// artista o de pestaña. Ahora solo se construye la que se va a ver; las demás
+// quedan marcadas como pendientes y se construyen la primera vez que se abren.
+const _artistPageDirty = new Set();
+
 function rebuildArtistPages(){
-  const cont=document.getElementById('artist-pages');cont.innerHTML='';
+  const cont=document.getElementById('artist-pages');
+  if(!cont)return;
+  cont.innerHTML='';
+  // Contenedores vacíos: baratos de crear, se rellenan al abrirse.
   S.artists.forEach(a=>{
     const div=document.createElement('div');
     div.className='page';div.id='page-artist-'+a.id;
-    div.innerHTML=buildArtistPage(a);
     cont.appendChild(div);
+    _artistPageDirty.add(a.id);
   });
-  if(curPage==='artist'&&curAid)document.getElementById('page-artist-'+curAid)?.classList.add('active');
+  // Solo se pinta de verdad la que está a la vista.
+  if(curPage==='artist'&&curAid){
+    ensureArtistPage(curAid);
+    document.getElementById('page-artist-'+curAid)?.classList.add('active');
+  }
+  // Los badges del menú lateral sí se refrescan para todos: son baratos y
+  // deben verse aunque su página no esté construida.
   setTimeout(()=>S.artists.forEach(a=>{updBadges(a);updChSum(a);}),30);
+}
+
+/** Construye la página de un artista si aún no lo estaba. */
+function ensureArtistPage(aid){
+  if(!_artistPageDirty.has(aid))return;
+  const a=S.artists.find(x=>x.id===aid);
+  const div=document.getElementById('page-artist-'+aid);
+  if(!a||!div)return;
+  div.innerHTML=buildArtistPage(a);
+  _artistPageDirty.delete(aid);
+  updBadges(a);updChSum(a);
+}
+
+/** Marca una página para reconstruirse la próxima vez que se abra. */
+function invalidateArtistPage(aid){
+  _artistPageDirty.add(aid);
+  if(curPage==='artist'&&curAid===aid) ensureArtistPage(aid);
 }
 
 function buildArtistPage(a){
@@ -3704,6 +3737,9 @@ function rebuildOneArtistPage(a){
   const pageId='page-artist-'+a.id;
   const page=document.getElementById(pageId);
   if(!page)return;
+  // Si la página aún no se ha construido (se crean bajo demanda), no hay tabla
+  // que redibujar: basta con marcarla para que se pinte al abrirse.
+  if(_artistPageDirty.has(a.id)) return;
   // Save scroll
   const wrap=page.querySelector('.ch-wrap');
   const sl=wrap?wrap.scrollLeft:0;
