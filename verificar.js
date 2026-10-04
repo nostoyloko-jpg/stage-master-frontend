@@ -7,7 +7,15 @@
    3 · Las dos copias del dominio son IDÉNTICAS, carácter a carácter
    4 · El JavaScript de index.html compila
 
-   Lo que esto NO comprueba: que la app se vea bien. Eso solo lo dice abrirla. */
+   Lo que esto NO comprueba: que la app se vea bien. Eso solo lo dice abrirla.
+
+   v3 — dos fragilidades corregidas:
+     · Chequeo 3: el fin del bloque se ancla al </script> en vez de a la primera
+       línea "});", que podía aparecer sin indentar dentro del dominio y dar
+       un "han divergido" falso.
+     · Chequeo 4: cada bloque <script> se comprueba por separado; concatenarlos
+       producía falsos "error de sintaxis" si dos bloques declaraban el mismo
+       const de nivel superior. */
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
@@ -41,6 +49,8 @@ if (!fs.existsSync('sm-core.test.js')) {
 }
 
 // ── 2 · Código mutilado por ediciones masivas ───────────────────────
+// Heurístico: puede avisar de un ",," o un ".." que estén dentro de un texto.
+// Los comentarios se ignoran.
 console.log('\n── 2/4 · Código mutilado ──');
 const patrones = [
   { nombre: 'identificador duplicado',   re: /\b([A-Za-z_$][A-Za-z0-9_$]{2,})\1\s*\(/ },
@@ -52,7 +62,6 @@ const patrones = [
 let hallazgos = 0;
 for (const f of FICHEROS) {
   fs.readFileSync(f, 'utf8').split('\n').forEach((linea, i) => {
-    // Los comentarios no son código: ahí un "a..b" es prosa, no un fallo.
     const codigo = linea.split('//')[0];
     if (!codigo.trim()) return;
     for (const p of patrones) {
@@ -78,52 +87,64 @@ if (ini < 0) {
   console.log('❌ No encuentro el bloque del dominio dentro de index.html');
   fallos++;
 } else {
-  let fin = -1;
-  for (let i = ini; i < Math.min(ini + 800, htmlLineas.length); i++) {
-    if (htmlLineas[i] === '});') { fin = i; break; }
+  // El fin del bloque se ancla al </script> que lo cierra (mucho más fiable
+  // que buscar la primera línea "});" del interior).
+  const cierre = htmlLineas.findIndex((l, i) => i > ini && l.includes('</script>'));
+  let incrustado = null;
+  if (cierre > ini) {
+    incrustado = htmlLineas.slice(ini - 1, cierre).join('\n').replace(/<\/script>\s*$/, '').trim();
+  } else {
+    // Reserva: si no hay </script> tras el marcador, escaneo clásico de "});"
+    for (let i = ini; i < Math.min(ini + 800, htmlLineas.length); i++) {
+      if (htmlLineas[i] === '});') { incrustado = htmlLineas.slice(ini - 1, i + 1).join('\n').trim(); break; }
+    }
   }
-  if (fin < 0) {
+  if (incrustado === null) {
     console.log('❌ No encuentro el final del bloque del dominio en index.html');
     fallos++;
+  } else if (incrustado === core) {
+    console.log('✅ Las dos copias son idénticas (' + core.split('\n').length + ' líneas)');
   } else {
-    const incrustado = htmlLineas.slice(ini - 1, fin + 1).join('\n').trim();
-    if (incrustado === core) {
-      console.log('✅ Las dos copias son idénticas (' + core.split('\n').length + ' líneas)');
-    } else {
-      console.log('❌ LAS COPIAS HAN DIVERGIDO. Primeras diferencias:');
-      const a = core.split('\n'), b = incrustado.split('\n');
-      let mostradas = 0;
-      for (let i = 0; i < Math.max(a.length, b.length) && mostradas < 6; i++) {
-        if (a[i] !== b[i]) {
-          console.log('   línea ' + (i + 1));
-          console.log('     sm-core.js : ' + (a[i] === undefined ? '(no existe)' : a[i].trim().slice(0, 80)));
-          console.log('     index.html : ' + (b[i] === undefined ? '(no existe)' : b[i].trim().slice(0, 80)));
-          mostradas++;
-        }
+    console.log('❌ LAS COPIAS HAN DIVERGIDO. Primeras diferencias:');
+    const a = core.split('\n'), b = incrustado.split('\n');
+    let mostradas = 0;
+    for (let i = 0; i < Math.max(a.length, b.length) && mostradas < 6; i++) {
+      if (a[i] !== b[i]) {
+        console.log('   línea ' + (i + 1));
+        console.log('     sm-core.js : ' + (a[i] === undefined ? '(no existe)' : a[i].trim().slice(0, 80)));
+        console.log('     index.html : ' + (b[i] === undefined ? '(no existe)' : b[i].trim().slice(0, 80)));
+        mostradas++;
       }
-      fallos++;
     }
+    fallos++;
   }
 }
 
 // ── 4 · El JavaScript de index.html compila ─────────────────────────
 // Un error de sintaxis dentro de un <script> no se ve hasta abrir la app.
+// Cada bloque se comprueba por separado: concatenarlos daría falsos positivos
+// si dos bloques declaran el mismo const de nivel superior.
 console.log('\n── 4/4 · Sintaxis de index.html ──');
 const html = fs.readFileSync('index.html', 'utf8');
 const bloques = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
 if (!bloques.length) {
   console.log('⚠️  No he encontrado bloques <script> en index.html');
 } else {
-  const tmp = path.join(require('os').tmpdir(), 'sm-sintaxis-' + Date.now() + '.js');
-  fs.writeFileSync(tmp, bloques.join('\n;\n'));
-  const r = spawnSync('node', ['--check', tmp], { encoding: 'utf8' });
-  fs.unlinkSync(tmp);
-  if (r.status === 0) console.log('✅ Los ' + bloques.length + ' bloques <script> compilan');
-  else {
-    console.log('❌ Error de sintaxis en index.html:');
-    console.log((r.stderr || '').split('\n').slice(0, 8).join('\n'));
-    fallos++;
-  }
+  const os = require('os');
+  let malos = 0;
+  bloques.forEach((bloque, n) => {
+    const tmp = path.join(os.tmpdir(), 'sm-sintaxis-' + Date.now() + '-' + n + '.js');
+    fs.writeFileSync(tmp, bloque);
+    const r = spawnSync('node', ['--check', tmp], { encoding: 'utf8' });
+    fs.unlinkSync(tmp);
+    if (r.status !== 0) {
+      console.log('❌ Bloque <script> nº ' + (n + 1) + ' con error de sintaxis:');
+      console.log((r.stderr || '').split('\n').slice(0, 8).join('\n'));
+      malos++;
+    }
+  });
+  if (!malos) console.log('✅ Los ' + bloques.length + ' bloques <script> compilan');
+  else fallos++;
 }
 
 // ── Resultado ───────────────────────────────────────────────────────
