@@ -380,6 +380,19 @@ group('Slots fijos ⚓ (equipo montado y compartido por día)');
     eq(C.fijosSinUso(s), [], 'un slot anclado en uso no da aviso');
   }
 
+  // [REGRESIÓN] Anclado desde un canal sin micro (Sonorama, F-15 el día 8): el anclaje
+  // vacío anulaba los SENN 416 de las bandas y faltaba un micro sin ningún aviso.
+  {
+    const vacio = { micro: '', di: '', pies: SIN };
+    const s = state({ sbConfig: lineaF({ [SAB]: { '5': vacio } }), artists: [banda(SAB), banda(SAB)] });
+    const r = C.computeStats(s, s.artists);
+    eq([r.mics.SM58, r.pies.A], [2, 2], '[REGRESIÓN] un anclaje sin equipo no anula el micro de las bandas');
+    eq(C.fijoDeCanal(s, s.artists[0], s.artists[0].channels[1]), null, 'y el canal no sale como "ya montado"');
+    eq(C.fijosVacios(s), [{ fecha: SAB, letter: 'F', slot: '5' }], 'y aparece en la lista de anclajes vacíos');
+    const conPie = state({ sbConfig: lineaF({ [SAB]: { '5': { micro: '', di: '', pies: PA } } }), artists: [banda(SAB)] });
+    eq(C.fijosVacios(conPie), [], 'un anclaje con solo pie sí tiene equipo');
+  }
+
   // DI estéreo anclada en dos conectores seguidos = 1 caja y 1 modelo.
   {
     const di = { micro: 'DI J48', di: 'ST', pies: SIN };

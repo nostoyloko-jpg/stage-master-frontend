@@ -412,8 +412,14 @@
   //   · los canales que van a él no cuentan micro, pies ni DI.
   // Otro día, el mismo slot no está anclado y cada banda cuenta lo suyo.
 
+  /** Un anclaje sin micro, sin DI y sin pies no tiene equipo: es un error al anclar. */
+  const fijoTieneEquipo = f => !!f && (!!asText(f.micro) || !!asText(f.di) ||
+    PIE_KEYS.some(k => f.pies && asBool(f.pies[k])));
+
   /**
    * Slot fijo al que va un canal en la fecha de festival de su artista, o null.
+   * Un anclaje SIN EQUIPO se ignora: si contara, los canales que van a él dejarían
+   * de sumar su micro y faltaría material sin ningún aviso. Se avisa con fijosVacios.
    * `fecha` es opcional (se calcula); se pasa cuando ya se conoce, por rendimiento.
    */
   function fijoDeCanal(state, artist, ch, fecha) {
@@ -424,7 +430,7 @@
       if (!dia) continue;
       const letter = String(fl.sbLetter).toUpperCase();
       const slot = asText(ch.subboxes?.[letter]);
-      if (slot && dia[slot]) return { key: `${fecha}|${letter}|${slot}`, fecha, letter, slot, fijo: dia[slot] };
+      if (slot && fijoTieneEquipo(dia[slot])) return { key: `${fecha}|${letter}|${slot}`, fecha, letter, slot, fijo: dia[slot] };
     }
     return null;
   }
@@ -486,6 +492,20 @@
           const usa = (dias.get(fecha) || []).some(a =>
             (a.channels || []).some(ch => asText(ch.subboxes?.[letter]) === slot));
           if (!usa) out.push({ fecha, letter, slot });
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Slots anclados sin equipo (sin micro, DI ni pies): no cuentan como anclaje; se avisa. */
+  function fijosVacios(state) {
+    const out = [];
+    for (const fl of state.sbConfig?.fixedLines || []) {
+      const letter = String(fl.sbLetter).toUpperCase();
+      for (const fecha in fl.fijos || {}) {
+        for (const slot in fl.fijos[fecha]) {
+          if (!fijoTieneEquipo(fl.fijos[fecha][slot])) out.push({ fecha, letter, slot });
         }
       }
     }
@@ -654,7 +674,7 @@
     // mangueras
     systemKeyOf, usesLetter, cajetinesOf, snakeStats,
     // slots fijos
-    normalizeFijos, fijoDeCanal, resolveFijos, fijosSinUso,
+    normalizeFijos, fijoDeCanal, resolveFijos, fijosSinUso, fijosVacios,
     // agregados
     computeStats, computeFestivalMax, buildLoadOutRows,
     // infraestructura

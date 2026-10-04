@@ -164,6 +164,9 @@ body.light .badge-amber{background:rgba(192,120,0,0.1);}
 .di-sel:focus{border-color:var(--accent);background:var(--inp-bg);outline:none;}
 .di-sel option{background:var(--inp-bg);color:var(--text);}
 .sb-inp{width:34px!important;min-width:34px;}
+.ancla-btn{margin-left:2px;width:16px;height:16px;padding:0;border:1px solid rgba(255,255,255,.15);border-radius:3px;background:none;color:rgba(255,255,255,.35);font-size:9px;line-height:14px;cursor:pointer;vertical-align:middle;font-family:var(--font);}
+.ancla-btn:disabled{opacity:.25;cursor:not-allowed;}
+@media print{.ancla-btn{display:none!important;}}
 .cs-inp{width:34px!important;min-width:34px;}
 .instr-inp{min-width:160px;}
 .micro-inp{min-width:95px;}
@@ -1149,8 +1152,14 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
   //   · los canales que van a él no cuentan micro, pies ni DI.
   // Otro día, el mismo slot no está anclado y cada banda cuenta lo suyo.
 
+  /** Un anclaje sin micro, sin DI y sin pies no tiene equipo: es un error al anclar. */
+  const fijoTieneEquipo = f => !!f && (!!asText(f.micro) || !!asText(f.di) ||
+    PIE_KEYS.some(k => f.pies && asBool(f.pies[k])));
+
   /**
    * Slot fijo al que va un canal en la fecha de festival de su artista, o null.
+   * Un anclaje SIN EQUIPO se ignora: si contara, los canales que van a él dejarían
+   * de sumar su micro y faltaría material sin ningún aviso. Se avisa con fijosVacios.
    * `fecha` es opcional (se calcula); se pasa cuando ya se conoce, por rendimiento.
    */
   function fijoDeCanal(state, artist, ch, fecha) {
@@ -1161,7 +1170,7 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
       if (!dia) continue;
       const letter = String(fl.sbLetter).toUpperCase();
       const slot = asText(ch.subboxes?.[letter]);
-      if (slot && dia[slot]) return { key: `${fecha}|${letter}|${slot}`, fecha, letter, slot, fijo: dia[slot] };
+      if (slot && fijoTieneEquipo(dia[slot])) return { key: `${fecha}|${letter}|${slot}`, fecha, letter, slot, fijo: dia[slot] };
     }
     return null;
   }
@@ -1223,6 +1232,20 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
           const usa = (dias.get(fecha) || []).some(a =>
             (a.channels || []).some(ch => asText(ch.subboxes?.[letter]) === slot));
           if (!usa) out.push({ fecha, letter, slot });
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Slots anclados sin equipo (sin micro, DI ni pies): no cuentan como anclaje; se avisa. */
+  function fijosVacios(state) {
+    const out = [];
+    for (const fl of state.sbConfig?.fixedLines || []) {
+      const letter = String(fl.sbLetter).toUpperCase();
+      for (const fecha in fl.fijos || {}) {
+        for (const slot in fl.fijos[fecha]) {
+          if (!fijoTieneEquipo(fl.fijos[fecha][slot])) out.push({ fecha, letter, slot });
         }
       }
     }
@@ -1391,7 +1414,7 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
     // mangueras
     systemKeyOf, usesLetter, cajetinesOf, snakeStats,
     // slots fijos
-    normalizeFijos, fijoDeCanal, resolveFijos, fijosSinUso,
+    normalizeFijos, fijoDeCanal, resolveFijos, fijosSinUso, fijosVacios,
     // agregados
     computeStats, computeFestivalMax, buildLoadOutRows,
     // infraestructura
@@ -2387,6 +2410,12 @@ let _marcasAntiguas={premontados:[],candados:[]};
 function avisarMarcasAntiguas(){
   const {premontados,candados}=_marcasAntiguas;
   _marcasAntiguas={premontados:[],candados:[]};
+  // Anclajes ⚓ guardados sin equipo: no cuentan; hay que rehacerlos.
+  const vacios=SMCore.fijosVacios(S);
+  if(vacios.length){
+    const lista=vacios.map(v=>`${v.letter}-${v.slot} (${fmtDate(v.fecha)})`).join(', ');
+    setTimeout(()=>showToast(`Conector(es) anclado(s) ⚓ sin micro, que no cuentan: ${lista}.\nÁbrelos en el Resumen de cajetines, suéltalos y ánclalos desde un canal con micro.`,'error'),premontados.length||candados.length?6000:800);
+  }
   if(!premontados.length&&!candados.length) return;
   const partes=[];
   if(premontados.length) partes.push(`${premontados.length} canal(es) con 📌 "ya montado": ${premontados.slice(0,6).join(', ')}${premontados.length>6?'…':''}`);
@@ -3289,17 +3318,39 @@ function buildArtistPage(a){
     const isPairMaster=validPairMaster.has(i);
     const isPairFollower=validPairFollower.has(i);
     const _sbVisual=_sbVisualMode.has(a.id);
+    // Conector anclado ⚓ ese día: se marca en su casilla y en la del instrumento.
+    const _fijo=SMCore.fijoDeCanal(S,a,ch);
+    // ⚓ junto al conector de una línea fija: ancla ese conector el día de esta banda,
+    // con el micro, el pie y la DI de este canal (lo mismo que en Resumen Cajetines).
+    const _fechaA=SMCore.festivalDateOf(S,a,false);
+    const anclaBtn=(sb,val)=>{
+      const fl=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===sb.letter);
+      if(!fl||!val) return '';
+      const guardado=_fechaA?fl.fijos?.[_fechaA]?.[val]:null;
+      const vale=!!_fijo&&_fijo.letter===String(sb.letter).toUpperCase();
+      const micro=String(ch.micro||'').trim();
+      const cuando=_fechaA?fmtDate(_fechaA):'';
+      let estilo='', tit, activo=true;
+      if(vale){ estilo='background:var(--amber,#f59e0b);color:#04231c;border-color:var(--amber,#f59e0b)'; tit=`${sb.letter}-${val} fijo el ${cuando} con ${_fijo.fijo.micro||'—'}. Clic para soltarlo (afecta a todas las bandas de ese día)`; }
+      else if(guardado){ estilo='color:var(--accent);border-color:var(--accent)'; tit=`${sb.letter}-${val} anclado el ${cuando} SIN EQUIPO: no cuenta. Clic para soltarlo`; }
+      else if(!_fechaA){ activo=false; tit='La banda no tiene fecha: no se puede anclar'; }
+      else if(!micro){ activo=false; tit='Este canal no tiene micro: ancla desde un canal que lo tenga'; }
+      else { tit=`Anclar ${sb.letter}-${val} el ${cuando} con ${micro==='__PROPIO__'?'micro propio':micro}: las bandas de ese día que vayan a ${sb.letter}-${val} quedarán ya montado`; }
+      return `<button type="button" class="ancla-btn" ${activo?`onclick="event.stopPropagation();toggleFijo('${sb.letter}','${esc(val)}',${a.id},${i},true)"`:'disabled'} title="${esc(tit)}" style="${estilo}">⚓</button>`;
+    };
     const sbCells=sbs.map((sb,si)=>{
       const val=String(ch.subboxes?.[sb.letter]||'').trim();
+      const anc=!!_fijo&&_fijo.letter===String(sb.letter).toUpperCase();
+      const ancTit=anc?`Conector fijo anclado este día con ${esc(_fijo.fijo.micro||'—')}: ya montado, no suma material`:'';
       if(_sbVisual){
         // Visual pill mode — click to open picker
         const pill=val
-          ? `<span style="display:inline-flex;align-items:center;gap:2px;background:${hex2rgba(sb.color,0.85)};color:#fff;border-radius:4px;padding:2px 7px 2px 5px;font-size:11px;font-weight:700;font-family:monospace;cursor:pointer;line-height:1.5;white-space:nowrap" onclick="openSBPicker(${a.id},${i},'${sb.letter}')" title="Cambiar conector">${sb.letter}<span style="opacity:.7;margin-left:2px">${val}</span></span>`
+          ? `<span style="display:inline-flex;align-items:center;gap:2px;background:${hex2rgba(sb.color,0.85)};color:#fff;border-radius:4px;padding:2px 7px 2px 5px;font-size:11px;font-weight:700;font-family:monospace;cursor:pointer;line-height:1.5;white-space:nowrap" onclick="openSBPicker(${a.id},${i},'${sb.letter}')" title="${anc?ancTit:'Cambiar conector'}">${anc?'⚓':''}${sb.letter}<span style="opacity:.7;margin-left:2px">${val}</span></span>`
           : `<span style="display:inline-flex;align-items:center;justify-content:center;background:transparent;color:rgba(255,255,255,.2);border:1px dashed rgba(255,255,255,.15);border-radius:4px;padding:1px 8px;font-size:11px;cursor:pointer;line-height:1.5;min-width:28px;font-weight:600" onclick="openSBPicker(${a.id},${i},'${sb.letter}')" title="Asignar conector">+</span>`;
-        return `<td class="sb-td-${si} sb-sub-col" style="background:${hex2rgba(sb.color,0.08)};text-align:center;vertical-align:middle;padding:1px 2px">${pill}<span class="print-val">${esc(val)}</span></td>`;
+        return `<td class="sb-td-${si} sb-sub-col" style="background:${hex2rgba(sb.color,0.08)};text-align:center;vertical-align:middle;padding:1px 2px;white-space:nowrap">${pill}${anclaBtn(sb,val)}<span class="print-val">${esc(val)}</span></td>`;
       } else {
         // Classic numeric input mode
-        return `<td class="sb-td-${si} sb-sub-col" style="background:${hex2rgba(sb.color,0.18)}"><input type="text" class="sb-inp" value="${esc(val)}" placeholder="—" oninput="updCh(${a.id},${i},'sb_${sb.letter}',this.value)" data-row="${i}" data-col="sb${si}" data-aid="${a.id}" data-chidx="${i}" tabindex="0"><span class="print-val">${esc(val)}</span></td>`;
+        return `<td class="sb-td-${si} sb-sub-col" style="background:${hex2rgba(sb.color,0.18)};white-space:nowrap;${anc?'box-shadow:inset 0 0 0 2px var(--amber,#f59e0b)':''}"${anc?` title="${ancTit}"`:''}><input type="text" class="sb-inp" value="${esc(val)}" placeholder="—" oninput="updCh(${a.id},${i},'sb_${sb.letter}',this.value)" data-row="${i}" data-col="sb${si}" data-aid="${a.id}" data-chidx="${i}" tabindex="0">${anclaBtn(sb,val)}<span class="print-val">${esc(val)}</span></td>`;
       }
     }).join('');
     const mOpts='<option value="">—</option>'
@@ -3356,8 +3407,7 @@ function buildArtistPage(a){
     }
 
     // "Ya montado" no se marca a mano: lo es el canal que va a un conector anclado ⚓
-    // ese día. Lo decide el dominio, igual que el recuento.
-    const _fijo=SMCore.fijoDeCanal(S,a,ch);
+    // ese día (_fijo, calculado arriba con el dominio, igual que el recuento).
     return`<tr draggable="false">
       <td class="ch-num" style="cursor:default">${i+1}</td>
       <td class="sb-summary-col"><div class="sb-pills-wrap">${sbPills}</div></td>
@@ -3878,37 +3928,62 @@ function openSlotChannelPicker(sbLetter, slot, ev, artistId){
 
   let html = '';
 
-  // Current assignments
+  // Current assignments — en una línea fija, AGRUPADOS POR DÍA DE FESTIVAL: el ⚓
+  // ancla el conector un día concreto, así que hay que ver de qué día es cada banda.
+  // (Sin agrupar, se ancló un día creyendo que era otro: Sonorama, F-15/F-16.)
   if(current.length){
     const many = current.length > 1;
-    html += `<div style="margin-bottom:12px;padding:8px 12px;background:${sbRgba(.08)};border:1px solid ${sbRgba(.2)};border-radius:6px">`;
-    html += `<div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:${sbRgba(.7)};margin-bottom:6px;font-weight:700">
-      ${many?'ASIGNADOS':'ASIGNADO'} EN ESTE CONECTOR</div>`;
-    current.forEach(e=>{
-      // Find the micro object for this channel
+    const _fl=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===sbLetter);
+    const _pieTxt=f=>PIE_DEFS.filter(p=>f?.pies?.[p.key]).map(p=>'pie '+String(p.label||p.key).toLowerCase()).join(' · ');
+    const _fila=(e,fijo)=>{
       const _artist=S.artists.find(a=>a.id===e.artistId);
       const _ch=_artist?.channels[e.chIdx];
       const _microName=_ch?.micro||'';
-      // ⚓ Anclaje del conector para el DÍA de festival de esta banda.
-      const _fecha=_artist?SMCore.festivalDateOf(S,_artist,false):'';
-      const _fl=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===sbLetter);
-      const _fijo=(_fecha&&_fl?.fijos?.[_fecha]?.[String(slot)])||null;
-      const _micLocked=!!_fijo;
-      const _lockTitle=_fijo?`Fijo este día con ${esc(_fijo.micro||'—')} — clic para soltarlo`
-        :(_fecha?'Anclar: este conector queda fijo este día con el micro, el pie y la DI de este canal':'La banda no tiene fecha: no se puede anclar');
-      const _lockBtn=isFixed
-        ?`<button onclick="toggleFijo('${sbLetter}','${esc(String(slot))}',${e.artistId},${e.chIdx})" title="${_lockTitle}" style="background:${_fijo?'rgba(245,158,11,.15)':'none'};border:1px solid ${_fijo?'var(--amber,#f59e0b)':'rgba(255,255,255,.2)'};color:${_fijo?'var(--amber,#f59e0b)':'rgba(255,255,255,.4)'};opacity:${_fecha?1:.4};border-radius:4px;padding:1px 7px;cursor:pointer;font-size:11px;font-family:var(--font)">⚓</button>`
-        :'';
-      html += `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+      let _btn='';
+      if(isFixed&&!fijo){
+        const _fecha=_artist?SMCore.festivalDateOf(S,_artist,false):'';
+        const ok=!!_fecha&&!!_microName;
+        const tit=!_fecha?'La banda no tiene fecha: no se puede anclar'
+          :!_microName?'Este canal no tiene micro: ancla desde un canal que lo tenga'
+          :`Anclar este conector el ${fmtDate(_fecha)} con ${esc(_microName)}${_pieTxt(_ch)?' · '+_pieTxt(_ch):''}`;
+        _btn=`<button ${ok?`onclick="toggleFijo('${sbLetter}','${esc(String(slot))}',${e.artistId},${e.chIdx})"`:'disabled'} title="${tit}" style="background:none;border:1px solid rgba(255,255,255,.2);color:rgba(255,255,255,.5);opacity:${ok?1:.3};border-radius:4px;padding:1px 7px;cursor:${ok?'pointer':'not-allowed'};font-size:11px;font-family:var(--font)">⚓</button>`;
+      }
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)">
         <span style="color:${sbColor};font-size:12px;font-weight:800;font-family:monospace;min-width:36px">CH${e.chNum}</span>
         <span style="color:#fff;font-size:13px;font-weight:700;flex:1">${esc((e.instrumento||'—').toUpperCase())}</span>
-        ${_microName?`<span style="font-size:10px;color:${_micLocked?'var(--amber,#f59e0b)':'rgba(255,255,255,.45)'};font-family:monospace">${esc(_microName)}</span>`:''}
-        ${_lockBtn}
+        ${_microName?`<span style="font-size:10px;color:${fijo?'var(--amber,#f59e0b)':'rgba(255,255,255,.45)'};font-family:monospace">${esc(_microName)}</span>`:`<span style="font-size:10px;color:rgba(255,255,255,.25);font-style:italic">sin micro</span>`}
+        ${_btn}
         ${isFixed?`<span style="font-size:10px;color:rgba(255,255,255,.3)">${esc(e.artistName.toUpperCase())}</span>`:''}
         <button onclick="unassignSlotChannel('${sbLetter}',${slot},${e.artistId},${e.chIdx})"
           style="background:none;border:1px solid ${sbRgba(.4)};color:${sbColor};border-radius:4px;padding:2px 8px;cursor:pointer;font-size:10px;font-family:var(--font);white-space:nowrap;">✕</button>
       </div>`;
-    });
+    };
+    html += `<div style="margin-bottom:12px;padding:8px 12px;background:${sbRgba(.08)};border:1px solid ${sbRgba(.2)};border-radius:6px">`;
+    html += `<div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:${sbRgba(.7)};margin-bottom:6px;font-weight:700">
+      ${many?'ASIGNADOS':'ASIGNADO'} EN ESTE CONECTOR</div>`;
+    if(!isFixed){
+      current.forEach(e=>{ html+=_fila(e,null); });
+    } else {
+      const porDia=new Map();
+      current.forEach(e=>{
+        const a=S.artists.find(x=>x.id===e.artistId);
+        const f=a?SMCore.festivalDateOf(S,a,false):'';
+        if(!porDia.has(f)) porDia.set(f,[]);
+        porDia.get(f).push(e);
+      });
+      [...porDia.keys()].sort((x,y)=>(!x)-(!y)||x.localeCompare(y)).forEach(fecha=>{
+        const fijo=(fecha&&_fl?.fijos?.[fecha]?.[String(slot)])||null;
+        const vacio=fijo&&!fijo.micro&&!fijo.di&&!_pieTxt(fijo);
+        const soltar=fijo?`<button onclick="soltarFijo('${sbLetter}','${esc(String(slot))}','${fecha}')" style="margin-left:auto;background:none;border:1px solid currentColor;color:inherit;border-radius:4px;padding:1px 8px;cursor:pointer;font-size:10px;font-family:var(--font)">Soltar</button>`:'';
+        const estado=!fecha?'<span style="color:rgba(255,255,255,.35)">sin fecha — no se puede anclar</span>'
+          :vacio?`<span style="color:var(--accent)">⚓ ANCLADO SIN EQUIPO — no cuenta. Suéltalo y ancla desde un canal con micro</span>${soltar}`
+          :fijo?`<span style="color:var(--amber,#f59e0b)">⚓ FIJO ESTE DÍA: ${esc(fijo.micro||'—')}${_pieTxt(fijo)?' · '+esc(_pieTxt(fijo)):''}${fijo.di?' · DI '+esc(fijo.di):''}</span>${soltar}`
+          :'<span style="color:rgba(255,255,255,.35)">sin anclar — pulsa ⚓ en el canal cuyo equipo quieres fijar</span>';
+        html+=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:${fecha===[...porDia.keys()][0]?0:10}px 0 2px;padding:4px 6px;border-radius:4px;background:${fijo&&!vacio?'rgba(245,158,11,.10)':vacio?'rgba(233,69,96,.12)':'rgba(255,255,255,.03)'};font-size:10px;font-weight:700">
+          <span style="color:#fff;letter-spacing:1px">${fecha?'DÍA '+fmtDate(fecha):'SIN FECHA'}</span>${estado}</div>`;
+        porDia.get(fecha).forEach(e=>{ html+=_fila(e,fijo&&!vacio?fijo:null); });
+      });
+    }
     html += `</div>`;
   }
 
@@ -6299,13 +6374,15 @@ function renderSbListBody(artists){
       const _fl=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===sb.letter);
       const _diasVista=new Set(artists.map(a=>SMCore.festivalDateOf(S,a,false)).filter(Boolean));
       const _sinUso=new Set(SMCore.fijosSinUso(S).filter(w=>w.letter===sb.letter).map(w=>w.fecha+'|'+w.slot));
+      const _vacios=new Set(SMCore.fijosVacios(S).filter(w=>w.letter===sb.letter).map(w=>w.fecha+'|'+w.slot));
       const _items=[];
       Object.keys(_fl?.fijos||{}).filter(f=>_diasVista.has(f)).sort().forEach(fecha=>{
         Object.keys(_fl.fijos[fecha]).sort((x,y)=>(parseInt(x)-parseInt(y))||x.localeCompare(y)).forEach(slot=>{
           const f=_fl.fijos[fecha][slot];
-          const mal=_sinUso.has(fecha+'|'+slot);
+          const vacio=_vacios.has(fecha+'|'+slot);
+          const mal=vacio||_sinUso.has(fecha+'|'+slot);
           const dia=fecha.slice(8,10)+'/'+fecha.slice(5,7);
-          _items.push(`<button onclick="openSlotChannelPicker('${sb.letter}','${esc(slot)}',null)" title="${mal?'Anclado y ninguna banda de ese día lo usa: no cuenta material. Revísalo.':'Conector anclado ese día — clic para verlo'}" style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;border:1px solid ${mal?'var(--accent)':'var(--amber,#f59e0b)'};background:${mal?'rgba(233,69,96,.12)':'rgba(245,158,11,.12)'};color:${mal?'var(--accent)':'var(--amber,#f59e0b)'};font-size:10px;cursor:pointer;font-family:var(--font)">⚓ ${dia} · ${esc(sb.letter)}-${esc(slot)} ${esc(f.micro||'—')}${mal?' · SIN USO':''}</button>`);
+          _items.push(`<button onclick="openSlotChannelPicker('${sb.letter}','${esc(slot)}',null)" title="${vacio?'Anclado sin equipo (sin micro): no cuenta como anclaje. Ábrelo, suéltalo y ancla desde un canal con micro.':mal?'Anclado y ninguna banda de ese día lo usa: no cuenta material. Revísalo.':'Conector anclado ese día — clic para verlo'}" style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;border:1px solid ${mal?'var(--accent)':'var(--amber,#f59e0b)'};background:${mal?'rgba(233,69,96,.12)':'rgba(245,158,11,.12)'};color:${mal?'var(--accent)':'var(--amber,#f59e0b)'};font-size:10px;cursor:pointer;font-family:var(--font)">⚓ ${dia} · ${esc(sb.letter)}-${esc(slot)} ${esc(f.micro||'—')}${vacio?' · SIN EQUIPO':mal?' · SIN USO':''}</button>`);
         });
       });
       if(_items.length){
@@ -7792,7 +7869,7 @@ window.addEventListener('load',()=>{
  * (Sustituye al 🔒 por modelo de micro, que se guardaba en el inventario y
  * afectaba a todos los micros de ese modelo, todos los días.)
  */
-function toggleFijo(sbLetter, slot, artistId, chIdx){
+function toggleFijo(sbLetter, slot, artistId, chIdx, desdeChList){
   const a=S.artists.find(x=>x.id===artistId);
   const ch=a?.channels[chIdx];
   const fl=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===sbLetter);
@@ -7805,12 +7882,40 @@ function toggleFijo(sbLetter, slot, artistId, chIdx){
   if(dia[slot]){
     delete dia[slot];
     if(!Object.keys(dia).length) delete fl.fijos[fecha];
+  } else if(!String(ch.micro||'').trim()){
+    // Un anclaje sin micro no tiene equipo y no cuenta (ver SMCore.fijosVacios).
+    if(!Object.keys(dia).length) delete fl.fijos[fecha];
+    showToast('Este canal no tiene micro: ancla desde un canal que lo tenga','error');
+    return;
   } else {
     dia[slot]={micro:ch.micro||'', di:ch.di||'', pies:{...SMCore.normalizeChannel(ch).pies}};
   }
   saveS(); snapshot();
-  rebuildArtistPages();   // las CH lists de ese día muestran "⚓ YA MONTADO"
+  rebuildArtistPagesKeepScroll();   // las CH lists de ese día muestran "⚓ YA MONTADO"
   renderSummary(); renderSbList();
+  if(!desdeChList) openSlotChannelPicker(sbLetter, slot, null, _slotPicker?.artistId ?? null);
+}
+
+/** Reconstruye las CH lists sin perder la posición: al anclar el canal 31 no se vuelve arriba. */
+function rebuildArtistPagesKeepScroll(){
+  const ms=document.getElementById('main-scroll');
+  const top=ms?ms.scrollTop:0, left=ms?ms.scrollLeft:0;
+  const cw=document.querySelector('#page-artist-'+curAid+' .ch-wrap');
+  const cwl=cw?cw.scrollLeft:0;
+  rebuildArtistPages();
+  if(ms){ ms.scrollTop=top; ms.scrollLeft=left; }
+  const cw2=document.querySelector('#page-artist-'+curAid+' .ch-wrap');
+  if(cw2) cw2.scrollLeft=cwl;
+}
+
+/** Suelta el anclaje ⚓ de un conector un día concreto (botón "Soltar" de la ventana del conector). */
+function soltarFijo(sbLetter, slot, fecha){
+  const fl=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===sbLetter);
+  if(!fl?.fijos?.[fecha]?.[String(slot)]) return;
+  delete fl.fijos[fecha][String(slot)];
+  if(!Object.keys(fl.fijos[fecha]).length) delete fl.fijos[fecha];
+  saveS(); snapshot();
+  rebuildArtistPagesKeepScroll(); renderSummary(); renderSbList();
   openSlotChannelPicker(sbLetter, slot, null, _slotPicker?.artistId ?? null);
 }
 
@@ -13047,6 +13152,11 @@ window.smCheck=function(){
   });
 
   // ── Avisos (no son diferencias de cifras) ──────────────────────────
+  const vacios=SMCore.fijosVacios(S);
+  if(vacios.length){
+    console.log('%c⚠ Conectores anclados ⚓ SIN EQUIPO (sin micro): no cuentan como anclaje, suéltalos y ánclalos desde un canal con micro:','color:#e94560;font-weight:bold');
+    console.table(vacios);
+  }
   const sinUso=SMCore.fijosSinUso(S);
   if(sinUso.length){
     console.log('%c⚠ Conectores anclados ⚓ que ninguna banda de ese día usa:','color:#f59e0b;font-weight:bold');
