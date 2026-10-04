@@ -12,7 +12,9 @@
  * Reglas implementadas (una sola vez, aquí):
  *   · Hora de cambio de día del festival
  *   · Emparejado de DI estéreo (una caja para L+R)
- *   · Exclusiones: "ya montado", micro "propio", XLR
+ *   · Exclusiones: micro "propio", XLR
+ *   · Slots fijos (⚓): el equipo de un slot anclado cuenta 1 vez por día;
+ *     los canales que van a ese slot ese día no suman nada
  *   · Reutilizable: suma(no reutilizables) + máx(reutilizables)
  *   · Mangueras variables: 1 por sistema · fijas: 1 global
  *   · Cajetines y cables link, con la regla de reutilizable
@@ -75,6 +77,7 @@
   /** Acepta true, 'true', 1 y '1' como verdadero; todo lo demás es falso.
    *  Sin esto, un JSON con {C:'false'} contaba un pie: 'false' es truthy. */
   const asBool = v => v === true || v === 'true' || v === 1 || v === '1';
+  const asDi = v => { const d = asText(v).toUpperCase(); return (d === 'ST' || d === 'M') ? d : ''; };
 
   function normalizeChannel(ch){
     const out = { ...(ch || {}) };
@@ -84,8 +87,7 @@
     out.obs         = asText(out.obs);
     out.diLink      = asText(out.diLink);
 
-    const di = asText(out.di).toUpperCase();
-    out.di = (di === 'ST' || di === 'M') ? di : '';
+    out.di = asDi(out.di);
 
     out.phantom     = asBool(out.phantom);
     out.premontado  = asBool(out.premontado);
@@ -133,6 +135,28 @@
     return out;
   }
 
+  /**
+   * Slots fijos de una línea fija: { fecha: { conector: { micro, di, pies } } }.
+   * La fecha es la del FESTIVAL (con el cambio de día ya aplicado).
+   */
+  function normalizeFijos(fijos){
+    const out = {};
+    if (!fijos || typeof fijos !== 'object') return out;
+    for (const fecha in fijos) {
+      const dia = fijos[fecha];
+      if (!dia || typeof dia !== 'object') continue;
+      const slots = {};
+      for (const k in dia) {
+        const f = dia[k] || {};
+        const pies = {};
+        for (const p of PIE_KEYS) pies[p] = asBool(f.pies && f.pies[p]);
+        slots[asText(k)] = { micro: asText(f.micro), di: asDi(f.di), pies };
+      }
+      out[asText(fecha)] = slots;
+    }
+    return out;
+  }
+
   /** Normaliza el estado completo. Devuelve un objeto nuevo; no muta el original. */
   function normalizeState(state){
     const s = { ...(state || {}) };
@@ -155,6 +179,7 @@
           ...l,
           sbLetter: asText(l.sbLetter).toUpperCase(),
           quantity: Math.max(1, parseInt(l.quantity, 10) || 1),
+          fijos: normalizeFijos(l.fijos),
         }))
       : [];
 
@@ -259,7 +284,6 @@
     const chs = artist.channels || [];
     for (let i = 0; i < chs.length; i++) {
       const ch = chs[i];
-      if (ch.premontado) continue;          // ya montado: no se recuenta
       if (skip.has(i)) continue;            // mitad inferior de un par ST
       if (!ch.micro || isPropio(ch.micro)) continue;
       const key = normalize ? normalize(ch.micro) : ch.micro;
@@ -379,6 +403,96 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════
+  // SLOTS FIJOS (⚓)
+  // ═══════════════════════════════════════════════════════════════════
+  // Un slot de una línea fija puede quedar anclado un día con su micro, sus
+  // pies y su DI: está montado y lo comparten todas las bandas de ese día que
+  // vayan a ese conector. Ese día:
+  //   · el slot cuenta su equipo UNA vez (si al menos una banda lo usa);
+  //   · los canales que van a él no cuentan micro, pies ni DI.
+  // Otro día, el mismo slot no está anclado y cada banda cuenta lo suyo.
+
+  /**
+   * Slot fijo al que va un canal en la fecha de festival de su artista, o null.
+   * `fecha` es opcional (se calcula); se pasa cuando ya se conoce, por rendimiento.
+   */
+  function fijoDeCanal(state, artist, ch, fecha) {
+    if (fecha === undefined) fecha = festivalDateOf(state, artist, false);
+    if (!fecha) return null;
+    for (const fl of state.sbConfig?.fixedLines || []) {
+      const dia = fl.fijos && fl.fijos[fecha];
+      if (!dia) continue;
+      const letter = String(fl.sbLetter).toUpperCase();
+      const slot = asText(ch.subboxes?.[letter]);
+      if (slot && dia[slot]) return { key: `${fecha}|${letter}|${slot}`, fecha, letter, slot, fijo: dia[slot] };
+    }
+    return null;
+  }
+
+  /**
+   * Separa el equipo de los slots fijos.
+   *   efectivos → los artistas con sus canales anclados vaciados de equipo
+   *               (conservan el conector para el recuento de mangueras)
+   *   fijos     → un pseudo-artista por línea y día con el equipo de los slots
+   *               USADOS, en orden de conector: así un par L/R de DI estéreo
+   *               en dos conectores seguidos es una caja, igual que en una CH list.
+   */
+  function resolveFijos(state, artists) {
+    const usados = new Map();
+    const efectivos = artists.map(a => {
+      const fecha = festivalDateOf(state, a, false);
+      let cambiado = false;
+      const channels = (a.channels || []).map(ch => {
+        const f = fijoDeCanal(state, a, ch, fecha);
+        if (!f) return ch;
+        cambiado = true;
+        if (!usados.has(f.key)) usados.set(f.key, f);
+        return { subboxes: ch.subboxes, micro: '', di: '', pies: {} };
+      });
+      return cambiado ? { ...a, channels } : a;
+    });
+
+    const porLinea = new Map();
+    for (const f of usados.values()) {
+      const k = `${f.fecha}|${f.letter}`;
+      if (!porLinea.has(k)) porLinea.set(k, []);
+      porLinea.get(k).push(f);
+    }
+    const fijos = [];
+    for (const [k, lista] of porLinea) {
+      lista.sort((x, y) => (parseInt(x.slot, 10) - parseInt(y.slot, 10)) || x.slot.localeCompare(y.slot));
+      const channels = [];
+      let prev = null;
+      for (const f of lista) {
+        const n = parseInt(f.slot, 10);
+        // Un hueco entre conectores rompe la adyacencia del par estéreo.
+        if (prev !== null && !(Number.isFinite(n) && n === prev + 1)) channels.push({ micro: '', di: '', pies: {} });
+        channels.push({ micro: f.fijo.micro, di: f.fijo.di, pies: f.fijo.pies || {} });
+        prev = Number.isFinite(n) ? n : null;
+      }
+      fijos.push({ id: `fijo-${k}`, reutilizable: false, channels });
+    }
+    return { efectivos, fijos };
+  }
+
+  /** Slots anclados que ninguna banda de ese día usa: un error de montaje, se avisa. */
+  function fijosSinUso(state) {
+    const out = [];
+    const dias = new Map(groupByFestivalDate(state, false).map(d => [d.key, d.artists]));
+    for (const fl of state.sbConfig?.fixedLines || []) {
+      const letter = String(fl.sbLetter).toUpperCase();
+      for (const fecha in fl.fijos || {}) {
+        for (const slot in fl.fijos[fecha]) {
+          const usa = (dias.get(fecha) || []).some(a =>
+            (a.channels || []).some(ch => asText(ch.subboxes?.[letter]) === slot));
+          if (!usa) out.push({ fecha, letter, slot });
+        }
+      }
+    }
+    return out;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
   // AGREGADO POR DÍA
   // ═══════════════════════════════════════════════════════════════════
 
@@ -387,12 +501,16 @@
    * los de un día). Es el único punto donde se combinan las reglas.
    */
   function computeStats(state, artists, opts) {
-    const mics = applyReuseMap(artists, a => micsOf(a, opts));
+    // El equipo de los slots fijos se cuenta aparte, una vez, como material no
+    // reutilizable; los canales que van a ellos llegan aquí ya vaciados.
+    const { efectivos, fijos } = resolveFijos(state, artists);
+    const todos = efectivos.concat(fijos);
+    const mics = applyReuseMap(todos, a => micsOf(a, opts));
     const pies = {};
-    for (const k of PIE_KEYS) pies[k] = applyReuse(artists, a => piesOf(a, k));
+    for (const k of PIE_KEYS) pies[k] = applyReuse(todos, a => piesOf(a, k));
     const di = {
-      mono: applyReuse(artists, a => (a.channels || []).filter(ch => ch.di === 'M').length),
-      stereo: applyReuse(artists, a => stereoDiBoxes(a)),
+      mono: applyReuse(todos, a => (a.channels || []).filter(ch => ch.di === 'M').length),
+      stereo: applyReuse(todos, a => stereoDiBoxes(a)),
     };
     const snakes = snakeStats(state, artists);
     return {
@@ -451,13 +569,13 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // FILAS DE LOAD OUT (consumidas por pantalla y por PDF)
+  // FILAS DE LA LISTA DE CARGA (antes "Load Out"; consumidas por pantalla y por PDF)
   // ═══════════════════════════════════════════════════════════════════
 
   const spare = (n, rate) => Math.max(1, Math.ceil(n * rate));
 
   /**
-   * Filas planas de Load Out. `key` es estable (no lleva la cantidad dentro)
+   * Filas planas de la Lista de carga. `key` es estable (no lleva la cantidad dentro)
    * para poder fusionar la misma fila entre días al calcular el máximo.
    */
   function buildLoadOutRows(stats) {
@@ -535,6 +653,8 @@
     applyReuse, applyReuseMap,
     // mangueras
     systemKeyOf, usesLetter, cajetinesOf, snakeStats,
+    // slots fijos
+    normalizeFijos, fijoDeCanal, resolveFijos, fijosSinUso,
     // agregados
     computeStats, computeFestivalMax, buildLoadOutRows,
     // infraestructura

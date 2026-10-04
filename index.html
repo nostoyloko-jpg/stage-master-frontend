@@ -749,7 +749,9 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
  * Reglas implementadas (una sola vez, aquí):
  *   · Hora de cambio de día del festival
  *   · Emparejado de DI estéreo (una caja para L+R)
- *   · Exclusiones: "ya montado", micro "propio", XLR
+ *   · Exclusiones: micro "propio", XLR
+ *   · Slots fijos (⚓): el equipo de un slot anclado cuenta 1 vez por día;
+ *     los canales que van a ese slot ese día no suman nada
  *   · Reutilizable: suma(no reutilizables) + máx(reutilizables)
  *   · Mangueras variables: 1 por sistema · fijas: 1 global
  *   · Cajetines y cables link, con la regla de reutilizable
@@ -812,6 +814,7 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
   /** Acepta true, 'true', 1 y '1' como verdadero; todo lo demás es falso.
    *  Sin esto, un JSON con {C:'false'} contaba un pie: 'false' es truthy. */
   const asBool = v => v === true || v === 'true' || v === 1 || v === '1';
+  const asDi = v => { const d = asText(v).toUpperCase(); return (d === 'ST' || d === 'M') ? d : ''; };
 
   function normalizeChannel(ch){
     const out = { ...(ch || {}) };
@@ -821,8 +824,7 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
     out.obs         = asText(out.obs);
     out.diLink      = asText(out.diLink);
 
-    const di = asText(out.di).toUpperCase();
-    out.di = (di === 'ST' || di === 'M') ? di : '';
+    out.di = asDi(out.di);
 
     out.phantom     = asBool(out.phantom);
     out.premontado  = asBool(out.premontado);
@@ -870,6 +872,28 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
     return out;
   }
 
+  /**
+   * Slots fijos de una línea fija: { fecha: { conector: { micro, di, pies } } }.
+   * La fecha es la del FESTIVAL (con el cambio de día ya aplicado).
+   */
+  function normalizeFijos(fijos){
+    const out = {};
+    if (!fijos || typeof fijos !== 'object') return out;
+    for (const fecha in fijos) {
+      const dia = fijos[fecha];
+      if (!dia || typeof dia !== 'object') continue;
+      const slots = {};
+      for (const k in dia) {
+        const f = dia[k] || {};
+        const pies = {};
+        for (const p of PIE_KEYS) pies[p] = asBool(f.pies && f.pies[p]);
+        slots[asText(k)] = { micro: asText(f.micro), di: asDi(f.di), pies };
+      }
+      out[asText(fecha)] = slots;
+    }
+    return out;
+  }
+
   /** Normaliza el estado completo. Devuelve un objeto nuevo; no muta el original. */
   function normalizeState(state){
     const s = { ...(state || {}) };
@@ -892,6 +916,7 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
           ...l,
           sbLetter: asText(l.sbLetter).toUpperCase(),
           quantity: Math.max(1, parseInt(l.quantity, 10) || 1),
+          fijos: normalizeFijos(l.fijos),
         }))
       : [];
 
@@ -996,7 +1021,6 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
     const chs = artist.channels || [];
     for (let i = 0; i < chs.length; i++) {
       const ch = chs[i];
-      if (ch.premontado) continue;          // ya montado: no se recuenta
       if (skip.has(i)) continue;            // mitad inferior de un par ST
       if (!ch.micro || isPropio(ch.micro)) continue;
       const key = normalize ? normalize(ch.micro) : ch.micro;
@@ -1116,6 +1140,96 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
   }
 
   // ═══════════════════════════════════════════════════════════════════
+  // SLOTS FIJOS (⚓)
+  // ═══════════════════════════════════════════════════════════════════
+  // Un slot de una línea fija puede quedar anclado un día con su micro, sus
+  // pies y su DI: está montado y lo comparten todas las bandas de ese día que
+  // vayan a ese conector. Ese día:
+  //   · el slot cuenta su equipo UNA vez (si al menos una banda lo usa);
+  //   · los canales que van a él no cuentan micro, pies ni DI.
+  // Otro día, el mismo slot no está anclado y cada banda cuenta lo suyo.
+
+  /**
+   * Slot fijo al que va un canal en la fecha de festival de su artista, o null.
+   * `fecha` es opcional (se calcula); se pasa cuando ya se conoce, por rendimiento.
+   */
+  function fijoDeCanal(state, artist, ch, fecha) {
+    if (fecha === undefined) fecha = festivalDateOf(state, artist, false);
+    if (!fecha) return null;
+    for (const fl of state.sbConfig?.fixedLines || []) {
+      const dia = fl.fijos && fl.fijos[fecha];
+      if (!dia) continue;
+      const letter = String(fl.sbLetter).toUpperCase();
+      const slot = asText(ch.subboxes?.[letter]);
+      if (slot && dia[slot]) return { key: `${fecha}|${letter}|${slot}`, fecha, letter, slot, fijo: dia[slot] };
+    }
+    return null;
+  }
+
+  /**
+   * Separa el equipo de los slots fijos.
+   *   efectivos → los artistas con sus canales anclados vaciados de equipo
+   *               (conservan el conector para el recuento de mangueras)
+   *   fijos     → un pseudo-artista por línea y día con el equipo de los slots
+   *               USADOS, en orden de conector: así un par L/R de DI estéreo
+   *               en dos conectores seguidos es una caja, igual que en una CH list.
+   */
+  function resolveFijos(state, artists) {
+    const usados = new Map();
+    const efectivos = artists.map(a => {
+      const fecha = festivalDateOf(state, a, false);
+      let cambiado = false;
+      const channels = (a.channels || []).map(ch => {
+        const f = fijoDeCanal(state, a, ch, fecha);
+        if (!f) return ch;
+        cambiado = true;
+        if (!usados.has(f.key)) usados.set(f.key, f);
+        return { subboxes: ch.subboxes, micro: '', di: '', pies: {} };
+      });
+      return cambiado ? { ...a, channels } : a;
+    });
+
+    const porLinea = new Map();
+    for (const f of usados.values()) {
+      const k = `${f.fecha}|${f.letter}`;
+      if (!porLinea.has(k)) porLinea.set(k, []);
+      porLinea.get(k).push(f);
+    }
+    const fijos = [];
+    for (const [k, lista] of porLinea) {
+      lista.sort((x, y) => (parseInt(x.slot, 10) - parseInt(y.slot, 10)) || x.slot.localeCompare(y.slot));
+      const channels = [];
+      let prev = null;
+      for (const f of lista) {
+        const n = parseInt(f.slot, 10);
+        // Un hueco entre conectores rompe la adyacencia del par estéreo.
+        if (prev !== null && !(Number.isFinite(n) && n === prev + 1)) channels.push({ micro: '', di: '', pies: {} });
+        channels.push({ micro: f.fijo.micro, di: f.fijo.di, pies: f.fijo.pies || {} });
+        prev = Number.isFinite(n) ? n : null;
+      }
+      fijos.push({ id: `fijo-${k}`, reutilizable: false, channels });
+    }
+    return { efectivos, fijos };
+  }
+
+  /** Slots anclados que ninguna banda de ese día usa: un error de montaje, se avisa. */
+  function fijosSinUso(state) {
+    const out = [];
+    const dias = new Map(groupByFestivalDate(state, false).map(d => [d.key, d.artists]));
+    for (const fl of state.sbConfig?.fixedLines || []) {
+      const letter = String(fl.sbLetter).toUpperCase();
+      for (const fecha in fl.fijos || {}) {
+        for (const slot in fl.fijos[fecha]) {
+          const usa = (dias.get(fecha) || []).some(a =>
+            (a.channels || []).some(ch => asText(ch.subboxes?.[letter]) === slot));
+          if (!usa) out.push({ fecha, letter, slot });
+        }
+      }
+    }
+    return out;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
   // AGREGADO POR DÍA
   // ═══════════════════════════════════════════════════════════════════
 
@@ -1124,12 +1238,16 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
    * los de un día). Es el único punto donde se combinan las reglas.
    */
   function computeStats(state, artists, opts) {
-    const mics = applyReuseMap(artists, a => micsOf(a, opts));
+    // El equipo de los slots fijos se cuenta aparte, una vez, como material no
+    // reutilizable; los canales que van a ellos llegan aquí ya vaciados.
+    const { efectivos, fijos } = resolveFijos(state, artists);
+    const todos = efectivos.concat(fijos);
+    const mics = applyReuseMap(todos, a => micsOf(a, opts));
     const pies = {};
-    for (const k of PIE_KEYS) pies[k] = applyReuse(artists, a => piesOf(a, k));
+    for (const k of PIE_KEYS) pies[k] = applyReuse(todos, a => piesOf(a, k));
     const di = {
-      mono: applyReuse(artists, a => (a.channels || []).filter(ch => ch.di === 'M').length),
-      stereo: applyReuse(artists, a => stereoDiBoxes(a)),
+      mono: applyReuse(todos, a => (a.channels || []).filter(ch => ch.di === 'M').length),
+      stereo: applyReuse(todos, a => stereoDiBoxes(a)),
     };
     const snakes = snakeStats(state, artists);
     return {
@@ -1188,13 +1306,13 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // FILAS DE LOAD OUT (consumidas por pantalla y por PDF)
+  // FILAS DE LA LISTA DE CARGA (antes "Load Out"; consumidas por pantalla y por PDF)
   // ═══════════════════════════════════════════════════════════════════
 
   const spare = (n, rate) => Math.max(1, Math.ceil(n * rate));
 
   /**
-   * Filas planas de Load Out. `key` es estable (no lleva la cantidad dentro)
+   * Filas planas de la Lista de carga. `key` es estable (no lleva la cantidad dentro)
    * para poder fusionar la misma fila entre días al calcular el máximo.
    */
   function buildLoadOutRows(stats) {
@@ -1272,15 +1390,14 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
     applyReuse, applyReuseMap,
     // mangueras
     systemKeyOf, usesLetter, cajetinesOf, snakeStats,
+    // slots fijos
+    normalizeFijos, fijoDeCanal, resolveFijos, fijosSinUso,
     // agregados
     computeStats, computeFestivalMax, buildLoadOutRows,
     // infraestructura
     createSelectors,
   };
 });
-
-
-
 </script>
 <script>
 if('serviceWorker' in navigator){
@@ -1320,7 +1437,7 @@ self.addEventListener('fetch',e=>e.respondWith(
     <div class="nav-item"        onclick="nav('summary')" id="nav-summary"><span class="dot"></span>Resumen material</div>
     <div class="nav-item"        onclick="nav('rchlist')" id="nav-rchlist"><span class="dot"></span>Resumen CH List</div>
     <div class="nav-item"        onclick="nav('sblist')"  id="nav-sblist"><span class="dot"></span>Resumen Cajetines</div>
-    <div class="nav-item"        onclick="nav('loadout')" id="nav-loadout"><span class="dot"></span>Load Out</div>
+    <div class="nav-item"        onclick="nav('loadout')" id="nav-loadout"><span class="dot"></span>Lista de carga</div>
   </div>
   <div class="nav-section nav-artist-list">
     <div class="nav-label">Artistas</div>
@@ -1823,11 +1940,11 @@ self.addEventListener('fetch',e=>e.respondWith(
     </div>
   </div>
 
-  <!-- LOAD OUT -->
+  <!-- LISTA DE CARGA (id interno "loadout": no cambiar, guarda las anotaciones) -->
   <div class="page" id="page-loadout">
     <div class="card">
       <div class="card-header">
-        <span class="card-title">Load Out</span>
+        <span class="card-title">Lista de carga</span>
         <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
           <span style="font-size:9px;color:var(--text3)">Spare = max(1, ⌈N×0.15⌉)</span>
           <button class="btn btn-sm" onclick="renderLoadOut()" title="Recalcular">↻</button>
@@ -2237,7 +2354,7 @@ function loadS(){
       try{ const v=localStorage.getItem(key); if(v){ raw=JSON.parse(v); break; } }catch(e){}
     }
   }
-  if(raw){ try{ S=migrateState(typeof raw==='string'?JSON.parse(raw):raw); }catch(e){} }
+  if(raw){ try{ S=migrateState(typeof raw==='string'?JSON.parse(raw):raw); avisarMarcasAntiguas(); }catch(e){} }
 }
 let _backupTimer=null;
 function saveS(){
@@ -2265,6 +2382,19 @@ function saveS(){
 }
 function defaultSB(n){return Array.from({length:n},(_,i)=>({letter:SB_LETTERS[i],color:DEFAULT_SB_COLORS[i]}));}
 
+let _marcasAntiguas={premontados:[],candados:[]};
+/** Avisa, tras cargar un festival, de las marcas antiguas que migrateState ha retirado. */
+function avisarMarcasAntiguas(){
+  const {premontados,candados}=_marcasAntiguas;
+  _marcasAntiguas={premontados:[],candados:[]};
+  if(!premontados.length&&!candados.length) return;
+  const partes=[];
+  if(premontados.length) partes.push(`${premontados.length} canal(es) con 📌 "ya montado": ${premontados.slice(0,6).join(', ')}${premontados.length>6?'…':''}`);
+  if(candados.length) partes.push(`micros con 🔒 de cajetín: ${candados.join(', ')}`);
+  console.warn('[Stage Master] Marcas antiguas retiradas al cargar:', {premontados, candados});
+  setTimeout(()=>showToast('Este festival tenía marcas de "fijo" antiguas, que ya no cuentan:\n'+partes.join('\n')+'\nAncla esos conectores con ⚓ en el cajetín fijo.','info'),800);
+}
+
 function migrateState(data){
   if(!data||typeof data!=='object') return S;
   const out={...S};
@@ -2282,11 +2412,22 @@ function migrateState(data){
   if(Array.isArray(data.micros)&&data.micros.length){
     out.micros=data.micros.map(m=>{
       if(typeof m==='string')return{nombre:m,tipo:'dinamico',patron:'cardioide',phantom:false};
-      return{nombre:m.nombre||m.name||m.referencia||'',tipo:m.tipo||'dinamico',patron:m.patron||'cardioide',phantom:m.phantom||false,locked:m.locked||false};
+      return{nombre:m.nombre||m.name||m.referencia||'',tipo:m.tipo||'dinamico',patron:m.patron||'cardioide',phantom:m.phantom||false};
     }).filter(m=>m.nombre).sort((a,b)=>a.nombre.localeCompare(b.nombre));
   }
   if(Array.isArray(data.artists)){out.artists=data.artists.map(a=>migrateA({...a}));}
   else{out.artists=[];}
+  // Marcas antiguas de "fijo": la 📌 por canal y el 🔒 por modelo de micro. Ya no
+  // cuentan (lo fijo se ancla en el conector y el día, ⚓), así que se retiran y se
+  // apunta dónde estaban para avisar al cargar (avisarMarcasAntiguas).
+  _marcasAntiguas={premontados:[],candados:[]};
+  out.artists.forEach(a=>(a.channels||[]).forEach((ch,i)=>{
+    if(ch.premontado===true||ch.premontado==='true'){ _marcasAntiguas.premontados.push((a.nombre||'?')+' CH'+(i+1)); }
+    ch.premontado=false;
+  }));
+  (Array.isArray(data.micros)?data.micros:[]).forEach(m=>{
+    if(m&&typeof m==='object'&&m.locked) _marcasAntiguas.candados.push(m.nombre||m.name||'?');
+  });
   out.micLocked=data.micLocked||false;
   out.sbConfig=data.sbConfig||{rows:2,cols:8,fixedLines:[]};
   // Manguera sets (Sistema A, B, ...) — restore them before the artists' mangueraSet ids are
@@ -3214,16 +3355,17 @@ function buildArtistPage(a){
       <td class="tleft"${rs}><textarea class="obs-inp" placeholder="${t('observaciones')}..." oninput="updCh(${a.id},${i},'obs',this.value);autoGrow(this)" data-row="${i}" data-col="obs">${esc(ch.obs||'')}</textarea><span class="print-val">${esc(ch.obs||'')}</span></td>`;
     }
 
+    // "Ya montado" no se marca a mano: lo es el canal que va a un conector anclado ⚓
+    // ese día. Lo decide el dominio, igual que el recuento.
+    const _fijo=SMCore.fijoDeCanal(S,a,ch);
     return`<tr draggable="false">
       <td class="ch-num" style="cursor:default">${i+1}</td>
       <td class="sb-summary-col"><div class="sb-pills-wrap">${sbPills}</div></td>
       ${sbCells}
-      <td class="tleft" style="position:relative;${ch.premontado?'background:rgba(29,233,182,0.06)':''}">
-        <input type="text" class="instr-inp" value="${esc(ch.instrumento||'')}" placeholder="${t('instrumento')}" oninput="updCh(${a.id},${i},'instrumento',this.value)" data-row="${i}" data-col="instr" style="${ch.premontado?'padding-right:20px':''}">
-        <button type="button" onclick="updCh(${a.id},${i},'premontado',${!ch.premontado});rebuildArtistPages()" title="${ch.premontado?'Ya montado — no se cuenta en Load Out. Clic para desmarcar':'Marcar como ya montado (ej. ambientes fijos) — no se contará en Load Out'}"
-          style="position:absolute;right:2px;top:50%;transform:translateY(-50%);width:15px;height:15px;border:none;border-radius:3px;cursor:pointer;font-size:9px;line-height:15px;padding:0;background:${ch.premontado?'var(--green,#1de9b6)':'transparent'};color:${ch.premontado?'#04231c':'rgba(255,255,255,.2)'}">📌</button>
-        ${ch.premontado?`<div style="font-size:8px;color:var(--green,#1de9b6);opacity:.85;margin-top:1px">YA MONTADO</div>`:''}
-        <span class="print-val">${esc(ch.instrumento||'')}${ch.premontado?' (ya montado)':''}</span>
+      <td class="tleft" style="position:relative;${_fijo?'background:rgba(245,158,11,0.07)':''}"${_fijo?` title="Ya montado: va al conector fijo ${esc(_fijo.letter)}-${esc(_fijo.slot)}, anclado este día con ${esc(_fijo.fijo.micro||'—')}. No suma material: lo cuenta el conector."`:''}>
+        <input type="text" class="instr-inp" value="${esc(ch.instrumento||'')}" placeholder="${t('instrumento')}" oninput="updCh(${a.id},${i},'instrumento',this.value)" data-row="${i}" data-col="instr">
+        ${_fijo?`<div style="font-size:8px;color:var(--amber,#f59e0b);opacity:.9;margin-top:1px">⚓ YA MONTADO</div>`:''}
+        <span class="print-val">${esc(ch.instrumento||'')}${_fijo?' (ya montado)':''}</span>
       </td>
       <td><input type="text" class="cs-inp" value="${esc(ch.canalStage||'')}" placeholder="—" oninput="updCh(${a.id},${i},'canalStage',this.value)" title="Canal Stage" data-row="${i}" data-col="cs"><span class="print-val">${esc(ch.canalStage||'')}</span></td>
       ${mergedCellsHtml}
@@ -3739,28 +3881,32 @@ function openSlotChannelPicker(sbLetter, slot, ev, artistId){
   // Current assignments
   if(current.length){
     const many = current.length > 1;
-    html += `<div style="margin-bottom:12px;padding:8px 12px;background:sbRgba(.08);border:1px solid sbRgba(.2);border-radius:6px">`;
-    html += `<div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:sbRgba(.7);margin-bottom:6px;font-weight:700">
+    html += `<div style="margin-bottom:12px;padding:8px 12px;background:${sbRgba(.08)};border:1px solid ${sbRgba(.2)};border-radius:6px">`;
+    html += `<div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:${sbRgba(.7)};margin-bottom:6px;font-weight:700">
       ${many?'ASIGNADOS':'ASIGNADO'} EN ESTE CONECTOR</div>`;
     current.forEach(e=>{
       // Find the micro object for this channel
       const _artist=S.artists.find(a=>a.id===e.artistId);
       const _ch=_artist?.channels[e.chIdx];
       const _microName=_ch?.micro||'';
-      const _micObj=_microName?S.micros.find(m=>typeof m==='object'&&m.nombre===_microName):null;
-      const _micIdx=_micObj?S.micros.indexOf(_micObj):-1;
-      const _micLocked=_micObj?.locked||false;
-      const _lockBtn=isFixed&&_micIdx>=0
-        ?`<button onclick="toggleMicItemLock(${_micIdx});openSlotChannelPicker('${sbLetter}',${slot},null,${e.artistId===null?null:e.artistId})" title="${_micLocked?'Fijo — clic para desbloquear':'Variable — clic para fijar'}" style="background:none;border:1px solid ${_micLocked?'var(--amber,#f59e0b)':'rgba(255,255,255,.2)'};color:${_micLocked?'var(--amber,#f59e0b)':'rgba(255,255,255,.4)'};border-radius:4px;padding:1px 7px;cursor:pointer;font-size:11px;font-family:var(--font)">${_micLocked?'🔒':'🔓'}</button>`
+      // ⚓ Anclaje del conector para el DÍA de festival de esta banda.
+      const _fecha=_artist?SMCore.festivalDateOf(S,_artist,false):'';
+      const _fl=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===sbLetter);
+      const _fijo=(_fecha&&_fl?.fijos?.[_fecha]?.[String(slot)])||null;
+      const _micLocked=!!_fijo;
+      const _lockTitle=_fijo?`Fijo este día con ${esc(_fijo.micro||'—')} — clic para soltarlo`
+        :(_fecha?'Anclar: este conector queda fijo este día con el micro, el pie y la DI de este canal':'La banda no tiene fecha: no se puede anclar');
+      const _lockBtn=isFixed
+        ?`<button onclick="toggleFijo('${sbLetter}','${esc(String(slot))}',${e.artistId},${e.chIdx})" title="${_lockTitle}" style="background:${_fijo?'rgba(245,158,11,.15)':'none'};border:1px solid ${_fijo?'var(--amber,#f59e0b)':'rgba(255,255,255,.2)'};color:${_fijo?'var(--amber,#f59e0b)':'rgba(255,255,255,.4)'};opacity:${_fecha?1:.4};border-radius:4px;padding:1px 7px;cursor:pointer;font-size:11px;font-family:var(--font)">⚓</button>`
         :'';
       html += `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)">
-        <span style="color:sbColor;font-size:12px;font-weight:800;font-family:monospace;min-width:36px">CH${e.chNum}</span>
+        <span style="color:${sbColor};font-size:12px;font-weight:800;font-family:monospace;min-width:36px">CH${e.chNum}</span>
         <span style="color:#fff;font-size:13px;font-weight:700;flex:1">${esc((e.instrumento||'—').toUpperCase())}</span>
         ${_microName?`<span style="font-size:10px;color:${_micLocked?'var(--amber,#f59e0b)':'rgba(255,255,255,.45)'};font-family:monospace">${esc(_microName)}</span>`:''}
         ${_lockBtn}
         ${isFixed?`<span style="font-size:10px;color:rgba(255,255,255,.3)">${esc(e.artistName.toUpperCase())}</span>`:''}
         <button onclick="unassignSlotChannel('${sbLetter}',${slot},${e.artistId},${e.chIdx})"
-          style="background:none;border:1px solid sbRgba(.4);color:sbColor;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:10px;font-family:var(--font);white-space:nowrap;">✕</button>
+          style="background:none;border:1px solid ${sbRgba(.4)};color:${sbColor};border-radius:4px;padding:2px 8px;cursor:pointer;font-size:10px;font-family:var(--font);white-space:nowrap;">✕</button>
       </div>`;
     });
     html += `</div>`;
@@ -5391,24 +5537,17 @@ function isLineInput(microName){
   const n=microName.toLowerCase();
   return n==='xlr'||n.startsWith('xlr ')||n.includes('línea')||n.includes('linea')||n==='line';
 }
-// Índices de canales que son la MITAD INFERIOR de un par estéreo consecutivo con el mismo
-// modelo asignado: comparten una sola caja física (p.ej. una DI estéreo Radial Pro D2 cubre
-// L y R), así que ese canal no debe volver a contar el equipo.
-function stereoSharedGearIdx(a){
-  const skip=new Set();
-  let pending=-1;
-  a.channels.forEach((ch,i)=>{
-    if(ch.di!=='ST'){pending=-1;return;}
-    if(pending>=0 && i===pending+1){
-      // Solo se comparte la caja si ambos canales llevan el mismo modelo (o el segundo va vacío).
-      const prev=a.channels[pending];
-      if(!ch.micro || ch.micro===prev.micro) skip.add(i);
-      pending=-1;
-      return;
-    }
-    pending=i;
-  });
-  return skip;
+// stereoSharedGearIdx eliminada: duplicaba SMCore.stereoFollowers. El Resumen
+// material ya cuenta con SMCore, igual que Load Out.
+
+/** Orden de las filas de micro en el Resumen: primero en el orden del inventario,
+ *  después los que no están en él (también son material), por orden alfabético. */
+function summaryMicOrder(names){
+  const inv=(S.micros||[]).map(m=>typeof m==='string'?m:m.nombre);
+  const set=new Set(names);
+  const enInv=inv.filter(n=>set.has(n));
+  const fuera=names.filter(n=>!inv.includes(n)).sort((a,b)=>a.localeCompare(b));
+  return [...enInv,...fuera];
 }
 
 // Número de CAJAS de DI estéreo de un artista: los canales ST consecutivos forman un par
@@ -5575,16 +5714,10 @@ function renderSummary(){
   // ──────────────────────────────────────────────────────────────────
   if(_summaryActiveTab==='max' && multiDay){
     const perDay=days.map(d=>({...d,stats:computeSummaryFor(d.artists)}));
-    // Aggregate maxes
-    const micMax={},piesMax={C:0,A:0,P:0,R:0},cajetinesMax={};
-    const allMics=new Set();perDay.forEach(d=>Object.keys(d.stats.micCounts).forEach(n=>allMics.add(n)));
-    allMics.forEach(n=>{micMax[n]=Math.max(...perDay.map(d=>d.stats.micCounts[n]||0));});
-    PIE_DEFS.forEach(p=>{piesMax[p.key]=Math.max(...perDay.map(d=>d.stats.piesCounts[p.key]||0));});
-    const allLetters=new Set();perDay.forEach(d=>Object.keys(d.stats.cajetinesByLetter).forEach(l=>allLetters.add(l)));
-    allLetters.forEach(l=>{cajetinesMax[l]=Math.max(...perDay.map(d=>d.stats.cajetinesByLetter[l]||0));});
-    const cablesMax={};
-    const allCableLetters=new Set();perDay.forEach(d=>Object.keys(d.stats.linkCablesByLetter||{}).forEach(l=>allCableLetters.add(l)));
-    allCableLetters.forEach(l=>{cablesMax[l]=Math.max(...perDay.map(d=>d.stats.linkCablesByLetter?.[l]||0));});
+    // Las columnas por día son las de cada día; la columna MÁXIMO sale del dominio,
+    // el mismo cálculo que la Lista de carga y los PDFs.
+    const fm=SMCore.computeFestivalMax(S);
+    const micMax=fm.mics, piesMax={C:0,A:0,P:0,R:0,...fm.pies}, cajetinesMax=fm.cajetines, cablesMax=fm.cables;
 
     // Stats cards — total max
     const totC=Math.max(...perDay.map(d=>d.artists.reduce((s,a)=>s+a.canales,0)));
@@ -5592,7 +5725,7 @@ function renderSummary(){
     const totP=Object.values(piesMax).reduce((s,n)=>s+n,0);
     // El material a llevar es el mayor total diario, no la suma de máximos por manguera
     // (esos máximos pueden darse en días distintos).
-    const totCaj=Math.max(0,...perDay.map(d=>Object.values(d.stats.cajetinesByLetter||{}).reduce((s,n)=>s+n,0)));
+    const totCaj=fm.totals.cajetines;
     const totCables=Object.values(cablesMax).reduce((s,n)=>s+n,0);
     const dayHint=`<div class="stat-card" style="opacity:.7"><div class="stat-label">DÍAS</div><div class="stat-value">${days.length}</div></div>`;
     document.getElementById('summary-stats').innerHTML=
@@ -5607,9 +5740,9 @@ function renderSummary(){
     const dayCols=perDay.map(d=>`<th style="min-width:70px;text-align:center;color:var(--text2)">${esc(d.label)}</th>`).join('');
     const totalCol=`<th style="min-width:70px;text-align:center;color:var(--accent);font-weight:900">MÁXIMO</th>`;
 
-    // Micros table
-    const mR=S.micros.map(mic=>{
-      const nm=typeof mic==='string'?mic:mic.nombre;
+    // Micros table — las filas salen de lo que hay en las CH lists, no del inventario:
+    // un micro que no está en la lista también es material.
+    const mR=summaryMicOrder(Object.keys(micMax)).map(nm=>{
       if(!micMax[nm])return'';
       const cells=perDay.map(d=>{const n=d.stats.micCounts[nm]||0;return `<td class="${n?'':'zero'}" style="text-align:center">${n||''}</td>`;}).join('');
       return`<tr><td class="left">${esc(nm)}</td>${cells}<td class="tcol" style="color:var(--accent);font-weight:800">${micMax[nm]}</td><td class="left mic-sticky-r" style="color:var(--text3)">${esc(nm)}</td></tr>`;
@@ -5631,13 +5764,9 @@ function renderSummary(){
     if(sbEl){
       const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
       // Aggregate max mangueras + cables per day for the total column.
-      const mangueraMax={},cablesMaxByLetter={};
-      const allMangLetters=new Set();
-      perDay.forEach(d=>Object.keys(d.stats.mangueraCountByLetter||{}).forEach(l=>allMangLetters.add(l)));
-      allMangLetters.forEach(l=>{mangueraMax[l]=Math.max(...perDay.map(d=>d.stats.mangueraCountByLetter?.[l]||0));});
-      const allCableLettersM=new Set();
-      perDay.forEach(d=>Object.keys(d.stats.linkCablesByLetter||{}).forEach(l=>allCableLettersM.add(l)));
-      allCableLettersM.forEach(l=>{cablesMaxByLetter[l]=Math.max(...perDay.map(d=>d.stats.linkCablesByLetter?.[l]||0));});
+      const mangueraMax=fm.mangueras, cablesMaxByLetter=fm.cables;
+      const allMangLetters=new Set(Object.keys(mangueraMax));
+      const allCableLettersM=new Set(Object.keys(cablesMaxByLetter));
 
       // ── MANGUERAS table (solo mangueras) ──
       const mangEl=document.getElementById('mangueras-summary-table');
@@ -5687,7 +5816,7 @@ function renderSummary(){
       // Total del día = todos los cajetines de ese día (sistemas + fijas + regla reutilizable).
       // El "máximo" que hay que llevar al festival es el mayor de esos totales diarios.
       const dayCajTotals=perDay.map(d=>Object.values(d.stats.cajetinesByLetter||{}).reduce((s,n)=>s+n,0));
-      const maxDayCaj=Math.max(0,...dayCajTotals);
+      const maxDayCaj=fm.totals.cajetines;
       const dayTotalCells=dayCajTotals.map(n=>`<td style="text-align:center;color:var(--accent);font-weight:800">${n||'—'}</td>`).join('');
       const totalRow=`<tr style="font-weight:700;border-top:2px solid var(--border2)"><td class="left" style="color:var(--accent)">TOTAL cajetines / día</td>${dayTotalCells}<td class="tcol" style="color:var(--accent);font-size:14px">${maxDayCaj}</td><td class="left mic-sticky-r" style="color:var(--accent)">TOTAL / día</td></tr>`;
       sbEl.innerHTML=`<thead><tr><th class="left">Cajetines</th>${dayCols}${totalCol}<th class="left mic-sticky-r" style="color:var(--text3)">Cajetines</th></tr></thead><tbody>${sbR||'<tr><td colspan="'+(perDay.length+3)+'" class="empty-state">Sin datos</td></tr>'}${sbR?totalRow:''}</tbody>`;
@@ -5710,14 +5839,18 @@ function renderSummary(){
   const titleEl=document.getElementById('subbox-summary-title');
   if(titleEl) titleEl.textContent='Cajetines utilizados';
 
+  // Todo el material sale del dominio: las mismas reglas que Load Out y los PDFs
+  // (exclusiones, pares estéreo, reutilizables, conectores fijos ⚓).
+  // Por artista se muestra lo que APORTA: sus canales en un conector anclado van
+  // vacíos, y el equipo de esos conectores se ve en la columna "⚓ Fijos".
+  const core=SMCore.computeStats(S,artists);
+  const rf=SMCore.resolveFijos(S,artists);
+  const efectivo=new Map(rf.efectivos.map(a=>[a.id,a]));
+  const hayFijos=rf.fijos.length>0;
   const tC=artists.reduce((s,a)=>s+a.canales,0);
-  const tM=artists.reduce((s,a)=>{
-    const shared=stereoSharedGearIdx(a);
-    return s+a.channels.filter((c,i)=>c.micro&&!isLineInput(c.micro)&&!c.premontado&&!isMicroPropio(c.micro)&&!isXLROnly(c.micro)&&!shared.has(i)).length;
-  },0);
-  // Una DI estéreo L/R es una sola caja física — se emparejan los ST consecutivos.
-  const tD=artists.reduce((s,a)=>s+a.channels.filter(c=>c.di==='M').length+SMCore.stereoDiBoxes(a),0);
-  const tP=artists.reduce((s,a)=>s+a.channels.reduce((ss,c)=>ss+PIE_DEFS.filter(p=>c.pies?.[p.key]).length,0),0);
+  const tM=core.totals.mics;
+  const tD=core.di.mono+core.di.stereo;
+  const tP=core.totals.pies;
   document.getElementById('summary-stats').innerHTML=[[t('totalCanales'),tC],[t('totalMicros'),tM],[t('totalDIs'),tD],[t('totalPies'),tP],[t('artistas'),artists.length]]
     .map(([l,v])=>`<div class="stat-card"><div class="stat-label">${l}</div><div class="stat-value">${v}</div></div>`).join('');
   // Los artistas ♻ reutilizables se marcan en la cabecera: sus cifras no suman al total,
@@ -5727,26 +5860,22 @@ function renderSummary(){
     const reut=a.reutilizable;
     return `<th class="mic-art-h" style="min-width:120px;background:${hex2rgba(col,reut?0.14:0.3)};color:${col};${reut?'border-bottom:2px solid var(--blue,#4fc3f7)':''}" ${reut?'title="Material reutilizable — comparte juego con los demás ♻: entre ellos solo cuenta el mayor"':''}>${esc(a.nombre.slice(0,10))}${reut?' <span style="color:var(--blue,#4fc3f7);font-size:9px">♻</span>':''}</th>`;
   }).join('');
-  const mR=S.micros.map(mic=>{
-    const nm=typeof mic==='string'?mic:mic.nombre;
-    const cc=artists.map(a=>{
-      const shared=stereoSharedGearIdx(a);
-      if(isXLROnly(nm))return 0;
-      return a.channels.filter((ch,i)=>ch.micro===nm&&!ch.premontado&&!shared.has(i)).length;
-    });
-    const isThisMicLocked=(typeof mic==='object'&&mic.locked)||S.micLocked;
-    // Regla ♻: los no reutilizables suman; los reutilizables comparten juego → solo el mayor.
-    const sumNonReuse=cc.reduce((s,n,ci)=>s+(artists[ci]?.reutilizable?0:n),0);
-    const maxReuse=Math.max(0,...cc.filter((_,ci)=>artists[ci]?.reutilizable),0);
-    const mTotal=isThisMicLocked?Math.max(0,...cc):sumNonReuse+maxReuse;
-    const isLocked=(typeof mic==='object'&&mic.locked)||false;
-    const lockMark=isLocked?'<span style="color:var(--amber,#f59e0b);margin-right:4px;font-size:10px">🔒</span>':'';
-    return mTotal?`<tr><td class="left">${lockMark}${esc(nm)}</td>${cc.map((n,ci)=>{
+  // Columna extra en micros y pies: el equipo de los conectores anclados, que se cuenta una vez.
+  const fijoTh=hayFijos?`<th class="mic-art-h" style="min-width:90px;background:rgba(245,158,11,.14);color:var(--amber,#f59e0b)" title="Equipo de los conectores fijos anclados ese día: cuenta una vez, lo usen las bandas que lo usen">⚓ Fijos</th>`:'';
+  const fijoTd=n=>hayFijos?`<td class="${n?'':'zero'}" style="color:var(--amber,#f59e0b)">${n||''}</td>`:'';
+  const micsArt=artists.map(a=>SMCore.micsOf(efectivo.get(a.id)||a));
+  const micsFijos={};
+  rf.fijos.forEach(f=>{const m=SMCore.micsOf(f);for(const k in m)micsFijos[k]=(micsFijos[k]||0)+m[k];});
+  const mR=summaryMicOrder(Object.keys(core.mics)).map(nm=>{
+    const mTotal=core.mics[nm]||0;
+    if(!mTotal) return '';
+    return `<tr><td class="left">${esc(nm)}</td>${micsArt.map((m,ci)=>{
+      const n=m[nm]||0;
       const reut=artists[ci]?.reutilizable;
       return `<td class="${n?'':'zero'}"${reut&&n?' style="opacity:.55;font-style:italic" title="Reutilizable — entre artistas ♻ solo cuenta el mayor"':''}>${n||''}</td>`;
-    }).join('')}<td class="tcol" style="${isLocked?'color:var(--amber,#f59e0b)':''}">${mTotal}</td><td class="left" style="color:var(--text3)">${esc(nm)}</td></tr>`:'';
+    }).join('')}${fijoTd(micsFijos[nm]||0)}<td class="tcol">${mTotal}</td><td class="left" style="color:var(--text3)">${esc(nm)}</td></tr>`;
   }).join('');
-  document.getElementById('mic-summary-table').innerHTML=`<thead><tr><th class="left">${t('micro')}</th>${aH}<th class="tcol">Total</th><th class="left mic-sticky-r" style="color:var(--text3)">${t('micro')}</th></tr></thead><tbody>${mR||`<tr><td colspan="${artists.length+3}" class="empty-state">${t('sinDatos')}</td></tr>`}</tbody>`;
+  document.getElementById('mic-summary-table').innerHTML=`<thead><tr><th class="left">${t('micro')}</th>${aH}${fijoTh}<th class="tcol">Total</th><th class="left mic-sticky-r" style="color:var(--text3)">${t('micro')}</th></tr></thead><tbody>${mR||`<tr><td colspan="${artists.length+3+(hayFijos?1:0)}" class="empty-state">${t('sinDatos')}</td></tr>`}</tbody>`;
   setTimeout(()=>{
     const wrap=document.getElementById('mic-summary-wrap');
     const tbl=document.getElementById('mic-summary-table');
@@ -5769,22 +5898,21 @@ function renderSummary(){
     if(w) w.style.maxWidth='100%';
   }, 200);
   const pR=PIE_DEFS.map(p=>{
-    const pCounts=artists.map(a=>a.channels.filter(ch=>ch.pies?.[p.key]).length);
-    const pTotal=pCounts.reduce((s,n,ci)=>s+(artists[ci]?.reutilizable?0:n),0)
-      + Math.max(0,...pCounts.filter((_,ci)=>artists[ci]?.reutilizable),0);
+    const pCounts=artists.map(a=>SMCore.piesOf(efectivo.get(a.id)||a,p.key));
+    const pFijos=rf.fijos.reduce((s,f)=>s+SMCore.piesOf(f,p.key),0);
+    const pTotal=core.pies[p.key]||0;
     return`<tr><td class="left">${t('pieLbl')} ${t(p.lkey||'pieCorto')}</td>${pCounts.map((n,ci)=>{
       const reut=artists[ci]?.reutilizable;
       return `<td class="${n?'':'zero'}"${reut&&n?' style="opacity:.55;font-style:italic" title="Reutilizable — entre artistas ♻ solo cuenta el mayor"':''}>${n||''}</td>`;
-    }).join('')}<td class="tcol">${pTotal}</td></tr>`;
+    }).join('')}${fijoTd(pFijos)}<td class="tcol">${pTotal}</td></tr>`;
   }).join('');
-  document.getElementById('pies-summary-table').innerHTML=`<thead><tr><th class="left">${t('pieLbl')}</th>${aH}<th>Total</th></tr></thead><tbody>${pR}</tbody>`;
+  document.getElementById('pies-summary-table').innerHTML=`<thead><tr><th class="left">${t('pieLbl')}</th>${aH}${fijoTh}<th>Total</th></tr></thead><tbody>${pR}</tbody>`;
 
   // ── Mangueras + Cajetines tables (normal / per-day mode) ──
   const sbEl=document.getElementById('subbox-summary-table');
   const mangEl=document.getElementById('mangueras-summary-table');
   if(sbEl&&S.subboxes.length){
     const fixedLetters=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
-    const configuredSetIds=new Set((S.mangueraSets||[]).map(s=>s.id));
 
     // ── MANGUERAS TABLE — agrupada por SISTEMA ──
     // Cada sistema (A, B, ... o "Propio" de un artista suelto) lleva su propio juego de
@@ -5792,10 +5920,9 @@ function renderSummary(){
     if(mangEl){
       const mangTitleEl=document.getElementById('mangueras-summary-title');
       if(mangTitleEl) mangTitleEl.textContent='Mangueras utilizadas (por sistema)';
-      const systemKeyOf=a=>{
-        const setId=a.mangueraSet||'propio';
-        return (setId==='propio'||!configuredSetIds.has(setId)) ? ('propio-'+a.id) : ('set-'+setId);
-      };
+      // Sistema y uso de cada manguera: las reglas del dominio (las mismas que Load Out).
+      const systemKeyOf=a=>SMCore.systemKeyOf(S,a);
+      const usaSistema=(key,letter)=>!!(core.systems[letter]&&core.systems[letter].has(key));
       // Build system → {label, color, artists[]}
       const systems=new Map();
       artists.forEach(a=>{
@@ -5820,11 +5947,11 @@ function renderSummary(){
       const colTotals={};letters.forEach(l=>colTotals[l]=0);
       systems.forEach((sys,key)=>{
         const cells=varSbs.map(sb=>{
-          const uses=sys.artists.some(a=>a.channels.some(ch=>String(ch.subboxes?.[sb.letter]||'').trim()));
+          const uses=usaSistema(key,sb.letter);
           if(uses)colTotals[sb.letter]++;
           return `<td class="${uses?'':'zero'}" style="text-align:center;${uses?'background:'+hex2rgba(sb.color,0.10)+';font-weight:700':''}">${uses?1:'—'}</td>`;
         }).join('');
-        const rowTotal=varSbs.filter(sb=>sys.artists.some(a=>a.channels.some(ch=>String(ch.subboxes?.[sb.letter]||'').trim()))).length;
+        const rowTotal=varSbs.filter(sb=>usaSistema(key,sb.letter)).length;
         if(!rowTotal)return; // sistema sin mangueras variables
         const names=sys.artists.map(a=>esc(a.nombre)).join(', ');
         rowsHtml+=`<tr>
@@ -5846,7 +5973,7 @@ function renderSummary(){
         <td class="tcol" style="color:var(--accent)">${totalMang}</td>
       </tr>`;
       // Fixed mangueras sit OUTSIDE the system grid — rigged once for the whole festival.
-      const fixedSbs=S.subboxes.filter(sb=>fixedLetters.has(sb.letter)&&artists.some(a=>a.channels.some(ch=>String(ch.subboxes?.[sb.letter]||'').trim())));
+      const fixedSbs=S.subboxes.filter(sb=>fixedLetters.has(sb.letter)&&(core.mangueras[sb.letter]||0)>0);
       const fixedRowsHtml=fixedSbs.length?`
         <tr><td colspan="${varSbs.length+2}" style="padding-top:10px;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);border-top:1px solid var(--border)">Mangueras fijas — fuera de los sistemas, se montan 1 vez</td></tr>
         ${fixedSbs.map(sb=>{
@@ -5867,13 +5994,11 @@ function renderSummary(){
           if(!n)return'';
           const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
           const letter=sb.letter;
-          const usesLetter=a=>a.channels.some(ch=>String(ch.subboxes?.[letter]||'').trim());
           const fl=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
           const cabFor=a=>{
-            if(!usesLetter(a))return 0;
+            if(!SMCore.usesLetter(a,letter))return 0;
             if(fl)return '·'; // línea fija: juego único compartido, no por banda
-            const q=Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
-            return Math.max(0,q-1);
+            return Math.max(0,SMCore.cajetinesOf(S,a,letter)-1);
           };
           const cells=artists.map(a=>{const v=cabFor(a);return `<td class="${v?'':'zero'}" style="text-align:center">${v||'—'}</td>`;}).join('');
           return `<tr><td class="left">${dot}Cable link — Manguera ${letter}</td>${cells}<td class="tcol">${n}</td></tr>`;
@@ -5891,26 +6016,15 @@ function renderSummary(){
     const cajColTotals=artists.map(()=>0); // total por artista
     const sbR=S.subboxes.map(sb=>{
       const letter=sb.letter;
-      const usesLetter=a=>a.channels.some(ch=>String(ch.subboxes?.[letter]||'').trim());
       const isFixed=fixedLetters.has(letter);
-      let counts,total;
-      if(isFixed){
-        // Línea fija: un solo juego para todo el festival, se comparte entre todas las bandas.
-        const fixedLine=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===letter);
-        const qty=fixedLine?(fixedLine.quantity||1):1;
-        const anyUse=artists.some(usesLetter);
-        counts=artists.map(a=>usesLetter(a)?'·':0); // "·" = comparte el juego fijo
-        total=anyUse?qty:0;
-      } else {
-        const nonReuse=artists.filter(a=>!a.reutilizable&&usesLetter(a));
-        const reuse=artists.filter(a=>a.reutilizable&&usesLetter(a));
-        const cajFor=a=>Math.max(1,Math.min(8,parseInt(a.sbCajetines?.[letter])||1));
-        counts=artists.map(a=>usesLetter(a)?cajFor(a):0);
-        total=nonReuse.reduce((s,a)=>s+cajFor(a),0)+Math.max(0,...reuse.map(cajFor));
-      }
+      // Reparto por artista con las reglas del dominio ("·" = comparte el juego de la
+      // línea fija). El total es el del dominio, el mismo que Load Out.
+      const counts=artists.map(a=>!SMCore.usesLetter(a,letter)?0:(isFixed?'·':SMCore.cajetinesOf(S,a,letter)));
+      const total=core.cajetines[letter]||0;
       if(!total)return'';
       cajGrand+=total;
-      counts.forEach((n,i)=>{cajColTotals[i]+=n;});
+      // Solo números: el "·" de las líneas fijas sumado como texto daba "2·" en el TOTAL.
+      counts.forEach((n,i)=>{if(typeof n==='number')cajColTotals[i]+=n;});
       const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sb.color};margin-right:6px;vertical-align:middle"></span>`;
       const fixLbl=isFixed?' <span style="font-size:9px;color:var(--text3)">(fija)</span>':'';
       return`<tr><td class="left">${dot}Cajetines Manguera ${letter}${fixLbl}</td>${counts.map(n=>`<td class="${n?'':'zero'}" style="text-align:center">${n||'—'}</td>`).join('')}<td class="tcol">${total}</td></tr>`;
@@ -6180,20 +6294,23 @@ function renderSbListBody(artists){
       });
       if(!Object.keys(slots).length)return;
       html+=renderSubboxSVG(sb,slots);
-      // Mic lock bar: mics used in this fixed subbox
-      const micNamesInSb=new Set();
-      artists.forEach(a=>a.channels.forEach(ch=>{if(String(ch.subboxes?.[sb.letter]||'').trim()&&ch.micro)micNamesInSb.add(ch.micro);}));
-      if(micNamesInSb.size){
-        const micItems=[...micNamesInSb].map(nm=>{
-          const micObj=S.micros.find(m=>typeof m==='object'&&m.nombre===nm);
-          const isLk=micObj?.locked||false;
-          const idx=S.micros.indexOf(micObj);
-          return idx>=0
-            ?`<button onclick="toggleMicItemLock(${idx});renderSbList();renderSummary()" style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;border:1px solid ${isLk?'var(--amber,#f59e0b)':'var(--border2)'};background:${isLk?'rgba(245,158,11,.12)':'transparent'};color:${isLk?'var(--amber,#f59e0b)':'var(--text3)'};font-size:10px;cursor:pointer;font-family:var(--font)">${isLk?'🔒':'🔓'} ${esc(nm)}</button>`
-            :`<span style="font-size:10px;color:var(--text3);padding:2px 6px">${esc(nm)}</span>`;
-        }).join('');
+      // ⚓ Conectores anclados de esta línea, por día (solo los días de esta vista).
+      // Un anclaje que ninguna banda de ese día usa es un error de montaje: va en rojo.
+      const _fl=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===sb.letter);
+      const _diasVista=new Set(artists.map(a=>SMCore.festivalDateOf(S,a,false)).filter(Boolean));
+      const _sinUso=new Set(SMCore.fijosSinUso(S).filter(w=>w.letter===sb.letter).map(w=>w.fecha+'|'+w.slot));
+      const _items=[];
+      Object.keys(_fl?.fijos||{}).filter(f=>_diasVista.has(f)).sort().forEach(fecha=>{
+        Object.keys(_fl.fijos[fecha]).sort((x,y)=>(parseInt(x)-parseInt(y))||x.localeCompare(y)).forEach(slot=>{
+          const f=_fl.fijos[fecha][slot];
+          const mal=_sinUso.has(fecha+'|'+slot);
+          const dia=fecha.slice(8,10)+'/'+fecha.slice(5,7);
+          _items.push(`<button onclick="openSlotChannelPicker('${sb.letter}','${esc(slot)}',null)" title="${mal?'Anclado y ninguna banda de ese día lo usa: no cuenta material. Revísalo.':'Conector anclado ese día — clic para verlo'}" style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;border:1px solid ${mal?'var(--accent)':'var(--amber,#f59e0b)'};background:${mal?'rgba(233,69,96,.12)':'rgba(245,158,11,.12)'};color:${mal?'var(--accent)':'var(--amber,#f59e0b)'};font-size:10px;cursor:pointer;font-family:var(--font)">⚓ ${dia} · ${esc(sb.letter)}-${esc(slot)} ${esc(f.micro||'—')}${mal?' · SIN USO':''}</button>`);
+        });
+      });
+      if(_items.length){
         html+=`<div style="display:flex;flex-wrap:wrap;gap:4px;margin:6px 0 4px;align-items:center">
-          <span style="font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-right:4px">Micros:</span>${micItems}</div>`;
+          <span style="font-size:9px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-right:4px">Fijos:</span>${_items.join('')}</div>`;
       }
     });
     html+=`</div></div>`;
@@ -6401,6 +6518,16 @@ function computeLoadStats(artists){
  * (sin la cantidad dentro), que es lo que permite fusionar la misma fila entre
  * días al calcular el máximo del festival.
  */
+/** Máximo del festival con los nombres de micro agrupados (Lista de carga y su PDF). */
+function festivalMaxLoad(){
+  return SMCore.computeFestivalMax(S,{normalize:n=>normalizeGearName(cleanForPDF(n))});
+}
+/** Filas de la Lista de carga para el máximo del festival, con los nombres que pinta la pantalla. */
+function loadRowsFestivalMax(){
+  const fijas=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
+  return buildLoadRows({_core:festivalMaxLoad(),fixedLetters:fijas});
+}
+
 function buildLoadRows(stats){
   const core = stats._core || {
     mics: stats.micCount, pies: {C:stats.piC,A:stats.piA,P:stats.piP,R:stats.piR},
@@ -6423,28 +6550,10 @@ function buildLoadRows(stats){
 // Hora de cambio de día del festival, en minutos desde medianoche. Un show que empieza antes
 // de esa hora pertenece a la jornada del día anterior (p.ej. un DJ a las 02:00 del domingo
 // sigue siendo "sábado" para el festival).
-function dayCutoffMins(){
-  const v=(S.event?.dayCutoff||'06:00').split(':');
-  const h=parseInt(v[0]),m=parseInt(v[1]);
-  if(isNaN(h))return 360;
-  return h*60+(isNaN(m)?0:m);
-}
-// Devuelve la fecha de FESTIVAL de un artista, aplicando la hora de cambio de día.
-function festivalDateOf(a, useSoundcheck){
-  const fecha=(useSoundcheck?(a.soundcheckFecha||a.fecha):a.fecha)||'';
-  const hora  =(useSoundcheck? a.soundcheckInicio : a.inicio)||'';
-  if(!fecha)return '';
-  const hm=hora.split(':');
-  const mins=(parseInt(hm[0])||0)*60+(parseInt(hm[1])||0);
-  if(!hora || mins>=dayCutoffMins()) return fecha;
-  // Empieza de madrugada → cuenta como el día anterior.
-  const [y,mo,d]=fecha.split('-').map(Number);
-  if(!y)return fecha;
-  const dt=new Date(y,mo-1,d);
-  dt.setDate(dt.getDate()-1);
-  const p=n=>String(n).padStart(2,'0');
-  return `${dt.getFullYear()}-${p(dt.getMonth()+1)}-${p(dt.getDate())}`;
-}
+// dayCutoffMins y la copia de festivalDateOf eliminadas: la regla del cambio de día
+// vive en el dominio. Con una hora mal escrita, la copia la tomaba como las 00:00 y
+// pasaba la banda al día anterior; el dominio deja la fecha como está.
+function festivalDateOf(a, useSoundcheck){ return SMCore.festivalDateOf(S, a, useSoundcheck); }
 
 // Group artists by their FESTIVAL date (see festivalDateOf); no date → "Sin fecha".
 function groupArtistsByDate(){
@@ -6482,20 +6591,9 @@ function renderLoadOut(){
   // Per-day stats and rows
   const perDay=days.map(d=>({...d,stats:computeLoadStats(d.artists),rows:buildLoadRows(computeLoadStats(d.artists))}));
 
-  // Compute "Total (máximo)" — for each element across all rows in all days, take the max
-  // Key by row.key when present (subbox rows, whose item text embeds a count that varies by day),
-  // otherwise by "cat|item" (e.g. "MICRO|SM58", whose item text is stable across days).
-  const maxMap={}; // key -> row (with max need/spare/total)
-  perDay.forEach(d=>{
-    d.rows.forEach(r=>{
-      const key=r.key||(r.cat+'|'+r.item);
-      const cur=maxMap[key];
-      if(!cur||r.total>cur.total){
-        maxMap[key]={...r};
-      }
-    });
-  });
-  const totalRows=Object.values(maxMap).sort((a,b)=>{
+  // "Total (máximo)": el máximo del festival lo calcula el dominio, el mismo para
+  // pantalla, Resumen y PDFs. Máximo de lo NECESARIO por elemento; el spare, después.
+  const totalRows=loadRowsFestivalMax().sort((a,b)=>{
     const catOrder={MICRO:0,DI:1,PIE:2,MANGUERA:3,'CABLE LINK':4,CAJETIN:5};
     if(catOrder[a.cat]!==catOrder[b.cat])return catOrder[a.cat]-catOrder[b.cat];
     if(a.cat==='MICRO')return b.total-a.total;
@@ -6657,7 +6755,7 @@ async function loadProjectFromServer(){
     const proj=data.project.data;
     if(proj&&typeof proj==='object'&&Object.keys(proj).length){
       destroyOrdenMap();
-      S=migrateState(proj);
+      S=migrateState(proj); avisarMarcasAntiguas();
       if(data.project.name) setFileName(data.project.name);
       _currentDriveFileId=null; // not a Drive file
       SM_STORE.setDrive({currentId:null,currentName:null});
@@ -7603,9 +7701,9 @@ const TOUR_STEPS = [
     <p style="font-size:12px;color:var(--accent);margin-top:8px">⚠️ Si hay errores de patch, el PDF te avisará antes de generar — puedes corregirlos o exportar igualmente.</p>`
   },
   {
-    title: '5. Load Out',
-    body: `<p style="font-size:13px;line-height:1.7;color:var(--text)">La sección <b>Load Out</b> calcula automáticamente el material necesario (micros, DIs, pies, cajetines) sumando todos los artistas.</p>
-    <p style="font-size:12px;color:var(--text2);margin-top:8px">Incluye spares calculados con la fórmula: <b>max(1, ⌈N × 15%⌉)</b> — siempre llevas al menos 1 de repuesto.<br><br>
+    title: '5. Lista de carga',
+    body: `<p style="font-size:13px;line-height:1.7;color:var(--text)">La <b>Lista de carga</b> calcula automáticamente el material necesario para el festival (micros, pies, mangueras, cables de link y cajetines): para cada elemento, lo que hace falta el día que más se necesita.</p>
+    <p style="font-size:12px;color:var(--text2);margin-top:8px">Añade spare: micros <b>max(1, ⌈N × 15%⌉)</b> y pies <b>max(1, ⌈N × 25%⌉)</b> — siempre llevas al menos 1 de repuesto.<br><br>
     Rellena <b>Load In</b> con el stock real que tienes y <b>Load Out</b> con lo que recuperas. Si Load Out &lt; Load In la fila se pone en rojo: <span style="color:var(--accent)">algo se quedó en el escenario.</span></p>`
   },
   {
@@ -7685,16 +7783,40 @@ window.addEventListener('load',()=>{
 // ── EXPORT ──
 
 // ══════════════════════════════════════════════
+// ⚓ CONECTORES FIJOS POR DÍA
+// ══════════════════════════════════════════════
+/**
+ * Ancla (o suelta) un conector de una línea fija para el DÍA de festival de esa
+ * banda, con el micro, el pie y la DI de su canal. Ese día el conector cuenta su
+ * equipo una vez y todas las bandas que van a él quedan "ya montado".
+ * (Sustituye al 🔒 por modelo de micro, que se guardaba en el inventario y
+ * afectaba a todos los micros de ese modelo, todos los días.)
+ */
+function toggleFijo(sbLetter, slot, artistId, chIdx){
+  const a=S.artists.find(x=>x.id===artistId);
+  const ch=a?.channels[chIdx];
+  const fl=(S.sbConfig?.fixedLines||[]).find(l=>l.sbLetter===sbLetter);
+  if(!a||!ch||!fl) return;
+  const fecha=SMCore.festivalDateOf(S,a,false);
+  if(!fecha){ showToast('La banda no tiene fecha: no se puede anclar el conector','error'); return; }
+  slot=String(slot);
+  if(!fl.fijos||typeof fl.fijos!=='object') fl.fijos={};
+  const dia=fl.fijos[fecha]||(fl.fijos[fecha]={});
+  if(dia[slot]){
+    delete dia[slot];
+    if(!Object.keys(dia).length) delete fl.fijos[fecha];
+  } else {
+    dia[slot]={micro:ch.micro||'', di:ch.di||'', pies:{...SMCore.normalizeChannel(ch).pies}};
+  }
+  saveS(); snapshot();
+  rebuildArtistPages();   // las CH lists de ese día muestran "⚓ YA MONTADO"
+  renderSummary(); renderSbList();
+  openSlotChannelPicker(sbLetter, slot, null, _slotPicker?.artistId ?? null);
+}
+
+// ══════════════════════════════════════════════
 // MICRO INVENTORY LOCK + EXPORT/IMPORT
 // ══════════════════════════════════════════════
-function toggleMicItemLock(idx){
-  const m=S.micros[idx];
-  if(!m||typeof m==='string') return;
-  m.locked=!m.locked;
-  saveS();
-  renderMicroList();
-  renderSummary();
-}
 
 function toggleMicLock(){
   S.micLocked=!S.micLocked;
@@ -9225,7 +9347,7 @@ function handleFileOpen(input){
     try{
       const data=JSON.parse(e.target.result);
       destroyOrdenMap();
-      S=migrateState(data);
+      S=migrateState(data); avisarMarcasAntiguas();
       if(!S.micros||!S.micros.length) initDefaultMicros();
       const name=file.name.replace(/\.json$/i,'');
       // Opening a local file — reset any Drive file association
@@ -9717,7 +9839,7 @@ async function driveOpenFile(fileId, name){
     const text = await driveDownloadFile(fileId);
     const data = JSON.parse(text);
     destroyOrdenMap();
-    S = migrateState(data);
+    S = migrateState(data); avisarMarcasAntiguas();
     if(!S.micros||!S.micros.length) initDefaultMicros();
     setFileName(name);
     _currentDriveFileId = fileId;
@@ -9959,7 +10081,7 @@ function getPdfSections(){
     {id:'orden',    label:'Orden del día',        sub:'Lineup y timeline',       pageId:'page-orden',   checked:true},
     {id:'summary',  label:'Resumen material',   sub:'Desglose por artista · para reporte completo', pageId:'page-summary', checked:false},
     {id:'maxfest',  label:'Máximo festival',    sub:'Material a preparar · máx. por día', pageId:'', checked:true},
-    {id:'loadout',  label:'Load Out',             sub:'Material + spares',       pageId:'',             checked:true},
+    {id:'loadout',  label:'Lista de carga',       sub:'Material + spares',       pageId:'',             checked:true},
     {id:'rchlist',  label:'Resumen CH List',      sub:'Todos los artistas',      pageId:'page-rchlist', checked:true},
     {id:'sblist',   label:'Resumen Cajetines',       sub:'Diagrama visual',         pageId:'page-sblist',  checked:true},
   ];
@@ -10285,31 +10407,39 @@ async function runPdfExport(){
         pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY3);
         pdf.text(pageLabel, M, 19);
 
-        const artistColW=Math.max(MIN_COL_MM, Math.floor(availW/Math.max(subset.length,1)));
+        // Conectores fijos ⚓: los canales anclados no suman por banda; su equipo va en
+        // una columna "Fijos" (en texto: la fuente del PDF no tiene emojis).
+        const _rf=SMCore.resolveFijos(S,subset);
+        const _ef=new Map(_rf.efectivos.map(a=>[a.id,a]));
+        const _hayFijos=_rf.fijos.length>0;
+        const _nCols=subset.length+(_hayFijos?1:0);
+        const artistColW=Math.max(MIN_COL_MM, Math.floor(availW/Math.max(_nCols,1)));
 
         // ── MICRÓFONOS ──
         pdf.setFont('helvetica','bold'); pdf.setFontSize(8); pdf.setTextColor(...ACCENT);
         pdf.text('MICRÓFONOS', M, 26);
-        const micHead=['Micrófono', ...subset.map(a=>safe(a.nombre,12)), 'Total'];
+        const micHead=['Micrófono', ...subset.map(a=>safe(a.nombre,12)), ...(_hayFijos?['Fijos']:[]), 'Total'];
         // Columnas por artista con el dominio: así se respetan las exclusiones
-        // ("ya montado", propio, XLR) y el emparejado de DI estéreo, que esta
-        // tabla ignoraba. El Total aplica además la regla de reutilizable, de
-        // modo que coincide con el Resumen material en pantalla.
+        // (propio, XLR, conectores anclados) y el emparejado de DI estéreo. El
+        // Total aplica además la regla de reutilizable, de modo que coincide con
+        // el Resumen material en pantalla.
         const _opts={normalize:n=>normalizeGearName(cleanForPDF(n))};
-        const perArtistMics=subset.map(a=>SMCore.micsOf(a,_opts));
+        const perArtistMics=subset.map(a=>SMCore.micsOf(_ef.get(a.id)||a,_opts));
+        const fijosMics={};
+        _rf.fijos.forEach(f=>{const m=SMCore.micsOf(f,_opts);for(const k in m)fijosMics[k]=(fijosMics[k]||0)+m[k];});
         const subsetTotals=SMCore.computeStats(S,subset,_opts).mics;
         const micBody=Object.entries(subsetTotals)
           .sort((a,b)=>b[1]-a[1])
           .map(([nm,total])=>{
             const counts=perArtistMics.map(m=>m[nm]||0);
-            return total?[nm,...counts.map(n=>n||''),total]:null;
+            return total?[nm,...counts.map(n=>n||''),...(_hayFijos?[fijosMics[nm]||'']:[]),total]:null;
           }).filter(Boolean);
 
         let cursorY=28;
         if(micBody.length){
           const micColStyles={0:{cellWidth:ROW_LABEL_W, fontStyle:'bold'}};
-          subset.forEach((_,i)=>{micColStyles[i+1]={cellWidth:artistColW, halign:'center'};});
-          micColStyles[subset.length+1]={cellWidth:TOTAL_COL_W, halign:'center', fontStyle:'bold', textColor:ACCENT};
+          for(let i=0;i<_nCols;i++) micColStyles[i+1]={cellWidth:artistColW, halign:'center'};
+          micColStyles[_nCols+1]={cellWidth:TOTAL_COL_W, halign:'center', fontStyle:'bold', textColor:ACCENT};
           pdf.autoTable({
             ...AT_STYLES, startY:cursorY, head:[micHead], body:micBody, columnStyles:micColStyles,
             headStyles:{...AT_STYLES.headStyles, fontSize:7}, styles:{...AT_STYLES.styles, fontSize:7.5, cellPadding:1.5},
@@ -10322,17 +10452,18 @@ async function runPdfExport(){
         if(cursorY<PH-40){
           pdf.setFont('helvetica','bold'); pdf.setFontSize(8); pdf.setTextColor(...ACCENT);
           pdf.text('PIES DE MICRÓFONO', M, cursorY);
-          const pieHead=['Pie', ...subset.map(a=>safe(a.nombre,12)), 'Total'];
+          const pieHead=['Pie', ...subset.map(a=>safe(a.nombre,12)), ...(_hayFijos?['Fijos']:[]), 'Total'];
           const piesTotals=SMCore.computeStats(S,subset).pies;
           const pieBody=PIE_DEFS.map(p=>{
-            const counts=subset.map(a=>SMCore.piesOf(a,p.key));
+            const counts=subset.map(a=>SMCore.piesOf(_ef.get(a.id)||a,p.key));
+            const fij=_rf.fijos.reduce((s,f)=>s+SMCore.piesOf(f,p.key),0);
             const total=piesTotals[p.key]||0;   // con la regla de reutilizable
-            return total?[p.label,...counts.map(n=>n||''),total]:null;
+            return total?[p.label,...counts.map(n=>n||''),...(_hayFijos?[fij||'']:[]),total]:null;
           }).filter(Boolean);
           if(pieBody.length){
             const pieColStyles={0:{cellWidth:ROW_LABEL_W, fontStyle:'bold'}};
-            subset.forEach((_,i)=>{pieColStyles[i+1]={cellWidth:artistColW, halign:'center'};});
-            pieColStyles[subset.length+1]={cellWidth:TOTAL_COL_W, halign:'center', fontStyle:'bold', textColor:ACCENT};
+            for(let i=0;i<_nCols;i++) pieColStyles[i+1]={cellWidth:artistColW, halign:'center'};
+            pieColStyles[_nCols+1]={cellWidth:TOTAL_COL_W, halign:'center', fontStyle:'bold', textColor:ACCENT};
             pdf.autoTable({
               ...AT_STYLES, startY:cursorY+2, head:[pieHead], body:pieBody, columnStyles:pieColStyles,
               headStyles:{...AT_STYLES.headStyles, fontSize:7}, styles:{...AT_STYLES.styles, fontSize:7.5, cellPadding:1.5},
@@ -10383,12 +10514,13 @@ async function runPdfExport(){
       if(!days.length) drawSummaryPageFor([], 'Sin artistas');
     }
 
-    // ── LOAD OUT ──
+    // ── MÁXIMO FESTIVAL ──
     else if(sec.id==='maxfest'){
       // Replica la pestaña "★ Máximo festival" de Resumen material: una columna por día y una
       // columna MÁXIMO, que es el material que hay que preparar para el festival.
       const days=groupArtistsByDate();
       const perDay=days.map(d=>({...d,stats:computeSummaryFor(d.artists)}));
+      const fm=SMCore.computeFestivalMax(S);   // columna MÁXIMO: el mismo cálculo que la pantalla
 
       pdf.addPage([210,297],'p');
       pdf.setFillColor(...BG); pdf.rect(0,0,210,297,'F');
@@ -10438,7 +10570,7 @@ async function runPdfExport(){
       perDay.forEach(d=>Object.keys(d.stats.micCounts).forEach(n=>allMics.add(n)));
       const micRows=[...allMics].sort().map(nm=>{
         const perDayVals=perDay.map(d=>d.stats.micCounts[nm]||0);
-        const max=Math.max(0,...perDayVals);
+        const max=fm.mics[nm]||0;
         return [safe(nm,30), ...perDayVals.map(n=>n||'—'), max];
       }).filter(r=>r[r.length-1]>0);
       maxTable('Micrófono', micRows);
@@ -10446,7 +10578,7 @@ async function runPdfExport(){
       // ── Pies ──
       const pieRows=PIE_DEFS.map(p=>{
         const perDayVals=perDay.map(d=>d.stats.piesCounts[p.key]||0);
-        const max=Math.max(0,...perDayVals);
+        const max=fm.pies[p.key]||0;
         if(!max)return null;
         return [safe('Pie '+p.label,30), ...perDayVals.map(n=>n||'—'), max];
       }).filter(Boolean);
@@ -10458,7 +10590,7 @@ async function runPdfExport(){
       const mangRows=[...allMang].sort().map(letter=>{
         const isFixed=(S.sbConfig?.fixedLines||[]).some(l=>l.sbLetter===letter);
         const perDayVals=perDay.map(d=>d.stats.mangueraCountByLetter?.[letter]||0);
-        const max=Math.max(0,...perDayVals);
+        const max=fm.mangueras[letter]||0;
         return ['Manguera '+letter+(isFixed?' (fija)':''), ...perDayVals.map(n=>n||'—'), max];
       }).filter(r=>r[r.length-1]>0);
       maxTable('Manguera', mangRows);
@@ -10468,7 +10600,7 @@ async function runPdfExport(){
       perDay.forEach(d=>Object.keys(d.stats.linkCablesByLetter||{}).forEach(l=>allCab.add(l)));
       const cabRows=[...allCab].sort().map(letter=>{
         const perDayVals=perDay.map(d=>d.stats.linkCablesByLetter?.[letter]||0);
-        const max=Math.max(0,...perDayVals);
+        const max=fm.cables[letter]||0;
         return ['Cable link — Manguera '+letter, ...perDayVals.map(n=>n||'—'), max];
       }).filter(r=>r[r.length-1]>0);
       maxTable('Cable de link', cabRows);
@@ -10479,56 +10611,34 @@ async function runPdfExport(){
       const cajRows=[...allCaj].sort().map(letter=>{
         const isFixed=(S.sbConfig?.fixedLines||[]).some(l=>l.sbLetter===letter);
         const perDayVals=perDay.map(d=>d.stats.cajetinesByLetter?.[letter]||0);
-        const max=Math.max(0,...perDayVals);
+        const max=fm.cajetines[letter]||0;
         return ['Cajetines Manguera '+letter+(isFixed?' (fija)':''), ...perDayVals.map(n=>n||'—'), max];
       }).filter(r=>r[r.length-1]>0);
       if(cajRows.length){
         const dayTotals=perDay.map(d=>Object.values(d.stats.cajetinesByLetter||{}).reduce((s,n)=>s+n,0));
-        cajRows.push(['TOTAL cajetines / día', ...dayTotals.map(n=>n||'—'), Math.max(0,...dayTotals)]);
+        cajRows.push(['TOTAL cajetines / día', ...dayTotals.map(n=>n||'—'), fm.totals.cajetines]);
       }
       maxTable('Cajetín', cajRows);
 
       addFooter(pdf,'Máximo Festival',210,297);
     }
+    // ── LISTA DE CARGA ──
     else if(sec.id==='loadout'){
       pdf.addPage([210,297],'p'); // portrait — checklist format
       pdf.setFillColor(...BG); pdf.rect(0,0,210,297,'F');
       pdf.setFillColor(...ACCENT); pdf.rect(0,0,210,4,'F');
       pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(...BLACK);
-      pdf.text('LOAD OUT  |  '+safe(S.event.nombre||'',40), M, 13);
+      pdf.text('LISTA DE CARGA  |  '+safe(S.event.nombre||'',40), M, 13);
       pdf.setFont('helvetica','normal'); pdf.setFontSize(7); pdf.setTextColor(...GRAY3);
-      pdf.text('Spare = max(1, ceil(necesidad × 0.15))', M, 19);
+      pdf.text('Material del festival = máximo necesario en un mismo día · Spare: micros 15 %, pies 25 % (mínimo 1)', M, 19);
 
-      // ── Spare formula ──
-      function spare(n){ return Math.max(1, Math.ceil(n*0.15)); }
-
-      // ── Material a preparar ──────────────────────────────────────────
-      // Se toma el MÁXIMO entre días, no la suma: si el día 1 hacen falta 32
-      // pies y el día 2 otros 28, con 32 basta — se recogen y se remontan.
-      // (El PDF venía sumando todos los días, lo que inflaba las cifras.)
-      const pdfOpts = { normalize: n => normalizeGearName(cleanForPDF(n)) };
-      const pdfDays = SMCore.groupByFestivalDate(S, false);
-      const pdfFixed = new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
-
-      const maxByKey = new Map();
-      (pdfDays.length ? pdfDays : [{ artists: S.artists }]).forEach(d => {
-        const stats = SMCore.computeStats(S, d.artists, pdfOpts);
-        SMCore.buildLoadOutRows(stats).forEach(r => {
-          const prev = maxByKey.get(r.key);
-          if (!prev || r.total > prev.total) maxByKey.set(r.key, r);
-        });
-      });
-
+      // Las mismas filas y nombres que la pantalla (pestaña "Total (máximo)"):
+      // máximo entre días, no la suma — si el día 1 hacen falta 32 pies y el día 2
+      // otros 28, con 32 basta: se recogen y se remontan.
       const catOrder = { MICRO:0, PIE:1, MANGUERA:2, 'CABLE LINK':3, CAJETIN:4 };
-      const rows = [...maxByKey.values()]
+      const rows = loadRowsFestivalMax()
         .sort((a,b) => (catOrder[a.cat]-catOrder[b.cat]) || (b.total-a.total))
-        .map(r => {
-          const letter = r.key ? r.key.split('_').pop() : '';
-          let item = r.item;
-          if (r.cat==='MANGUERA' && pdfFixed.has(letter)) item = `Manguera ${letter} (fija)`;
-          if (r.cat==='CAJETIN') item = `Cajetines — Manguera ${letter} ×${r.need}`;
-          return [r.cat, item, r.need, r.spare, r.total, '', ''];
-        });
+        .map(r => [r.cat, r.item, r.need, r.spare, r.total, '', '']);
 
       pdf.autoTable({
         ...AT_STYLES,
@@ -10578,7 +10688,7 @@ async function runPdfExport(){
       const ly=pdf.lastAutoTable.finalY+6;
       pdf.setFont('helvetica','normal'); pdf.setFontSize(7); pdf.setTextColor(...GRAY3);
       pdf.text('Spare = max(1, ceil(N × 0.15)) para micros/DIs  ·  max(1, ceil(N × 0.25)) para pies  ·  Mangueras sin spare recomendado', M, ly);
-      addFooter(pdf,'Load Out', 210, 297);
+      addFooter(pdf,'Lista de carga', 210, 297);
     }
 
     // ── 4. RESUMEN CH LIST ──
@@ -12807,7 +12917,7 @@ window.smPerf=function(){
 
   // Render de cada vista (cálculo + pintar el DOM)
   r.push(t('Render · Resumen material', ()=>renderSummary(), 5));
-  r.push(t('Render · Load Out',         ()=>renderLoadOut(), 5));
+  r.push(t('Render · Lista de carga',         ()=>renderLoadOut(), 5));
   r.push(t('Render · Resumen CH List',  ()=>renderRchList(), 5));
   r.push(t('Render · Resumen Cajetines',()=>renderSbList(), 5));
   r.push(t('Render · CH lists (todas)', ()=>rebuildArtistPages(), 3));
@@ -12820,125 +12930,134 @@ window.smPerf=function(){
 };
 
 window.smCheck=function(){
+  // Compara lo que PINTA cada vista (Lista de carga y Resumen material, pestaña a
+  // pestaña) con lo que calcula el dominio. Antes comparaba el dominio consigo
+  // mismo —las vistas son envoltorios de SMCore— y no podía fallar nunca.
   if(typeof SMCore==='undefined'){console.error('SMCore no está cargado');return;}
-  const opts={normalize:n=>normalizeGearName(cleanForPDF(n))};
-  const core=SMCore.computeStats(S,S.artists,opts);
-  const app =computeLoadStats(S.artists);
   const difs=[];
-  const cmp=(label,a,b)=>{ if((a||0)!==(b||0)) difs.push({elemento:label,dominio:a||0,app:b||0}); };
+  const num=v=>{const n=parseInt(String(v).replace(/[^\d-]/g,''),10);return Number.isFinite(n)?n:0;};
+  const cmp=(label,dominio,pantalla)=>{ if((dominio||0)!==(pantalla||0)) difs.push({elemento:label,dominio:dominio||0,pantalla:pantalla||0}); };
+  const cmpMapa=(pref,dom,pan)=>new Set([...Object.keys(dom),...Object.keys(pan)]).forEach(k=>cmp(pref+' · '+k,dom[k],pan[k]));
+  const filas=sel=>[...document.querySelectorAll(sel+' tbody tr')].map(tr=>[...tr.children].map(td=>td.textContent.trim()));
+  const sinCeros=m=>{const o={};for(const k in m) if(m[k]) o[k]=m[k];return o;};
+  const optsLO={normalize:n=>normalizeGearName(cleanForPDF(n))};
+  const dias=groupArtistsByDate();
+  const multi=dias.length>1;
+  const nombreDia=i=>dias[i].label||dias[i].key||('día '+(i+1));
+  const tabRes=_summaryActiveTab, tabLO=_loActiveTab;
 
-  const keys=new Set([...Object.keys(core.mics),...Object.keys(app.micCount||{})]);
-  keys.forEach(k=>cmp('MICRO '+k, core.mics[k], (app.micCount||{})[k]));
-  cmp('DI Mono',   core.di.mono,   app.diM);
-  cmp('DI Stereo', core.di.stereo, app.diST);
-  cmp('Pie Corto', core.pies.C, app.piC);
-  cmp('Pie Alto',  core.pies.A, app.piA);
-  cmp('Pie Pinza', core.pies.P, app.piP);
-  cmp('Pie Recto', core.pies.R, app.piR);
-  Object.keys({...core.mangueras,...(app.sbCount||{})}).forEach(l=>{
-    cmp('Manguera '+l,  core.mangueras[l], (app.sbCount||{})[l]);
-    cmp('Cajetines '+l, core.cajetines[l], (app.cajetinesByLetter||{})[l]);
-    cmp('Cables '+l,    core.cables[l],    (app.linkCablesByLetter||{})[l]);
-  });
-
-  // PDF de Resumen: sus columnas por artista deben respetar las mismas
-  // exclusiones que la pantalla (ya montado, propio, XLR, pares ST).
-  (function(){
-    const o={normalize:n=>normalizeGearName(cleanForPDF(n))};
-    SMCore.groupByFestivalDate(S,false).forEach(d=>{
-      const dia=d.key==='__nodate__'?'sin fecha':d.key;
-      const porArtista=d.artists.map(a=>SMCore.micsOf(a,o));
-      const totales=SMCore.computeStats(S,d.artists,o).mics;
-      Object.keys(totales).forEach(nm=>{
-        const suma=porArtista.reduce((s,m)=>s+(m[nm]||0),0);
-        const hayReut=d.artists.some(a=>a.reutilizable);
-        // Sin reutilizables, el total debe ser exactamente la suma de columnas.
-        if(!hayReut) cmp('PDF resumen '+dia+' · '+nm, totales[nm], suma);
-        // Con reutilizables, el total nunca puede superar la suma.
-        else if(totales[nm]>suma)
-          difs.push({elemento:'PDF resumen '+dia+' · '+nm, dominio:totales[nm], app:suma});
+  try{
+    // ── LOAD OUT ─────────────────────────────────────────────────────
+    const leerLO=()=>{
+      const m={};
+      document.querySelectorAll('#loadout-container table tbody tr').forEach(tr=>{
+        const td=tr.children; if(td.length<5) return;
+        const item=(td[1].firstChild?.textContent||td[1].textContent).trim();
+        m[item]=num(td[2].textContent);
       });
-    });
-  })();
+      return m;
+    };
+    // Mismos nombres de fila que pinta la pantalla ("(fija)", "×N"); las cifras, del dominio.
+    const fijas=new Set((S.sbConfig?.fixedLines||[]).map(l=>l.sbLetter).filter(Boolean));
+    const esperadoLO=st=>{const m={};buildLoadRows({_core:st,fixedLetters:fijas}).forEach(r=>{m[r.item]=r.need;});return m;};
+    const tabsLO=[['total', multi?'Lista de carga · Total (máximo)':'Lista de carga', multi?SMCore.computeFestivalMax(S,optsLO):SMCore.computeStats(S,S.artists,optsLO)]];
+    if(multi) dias.forEach((d,i)=>tabsLO.push(['day-'+i,'Lista de carga · '+nombreDia(i),SMCore.computeStats(S,d.artists,optsLO)]));
+    tabsLO.forEach(([tab,label,st])=>{ _loActiveTab=tab; renderLoadOut(); cmpMapa(label,esperadoLO(st),leerLO()); });
 
-  // Pantalla vs PDF: el PDF tenía su propio cálculo y contaba las mangueras
-  // variables por artista en vez de por sistema. Ahora ambos salen del dominio,
-  // así que fila a fila deben coincidir.
-  (function(){
-    const core = computeLoadStats(S.artists)._core;
-    SMCore.buildLoadOutRows(core).forEach(r=>{
-      cmp('pantalla=PDF · '+r.item, r.need, r.need); // misma fuente: no puede divergir
-    });
-    const mang = Object.entries(core.mangueras);
-    mang.forEach(([l,n])=>{
-      const porSistema = (core.systems && core.systems[l]) ? core.systems[l].size : n;
-      cmp('manguera '+l+' por sistema', n, porSistema);
-    });
-  })();
+    // ── RESUMEN MATERIAL ─────────────────────────────────────────────
+    // Total = penúltima celda si la fila acaba con el nombre repetido; si no, la última.
+    const totalDe=(fila,conNombreAlFinal)=>num(fila[fila.length-(conNombreAlFinal?2:1)]);
+    const leerRes=esMax=>{
+      const r={mics:{},pies:{},caj:{},cab:{},cajTotal:null,mang:{}};
+      filas('#mic-summary-table').forEach(f=>{ if(f.length>2) r.mics[f[0]]=totalDe(f,true); });
+      filas('#pies-summary-table').forEach((f,i)=>{ const p=PIE_DEFS[i]; if(p&&f.length>1) r.pies[p.key]=totalDe(f,esMax); });
+      filas('#subbox-summary-table').forEach(f=>{
+        const m=/Manguera\s+(\S+)/.exec(f[0]);
+        if(m) r.caj[m[1]]=totalDe(f,esMax);
+        else if(/^TOTAL/.test(f[0])) r.cajTotal=totalDe(f,esMax);
+      });
+      filas('#cables-summary-table').forEach(f=>{ const m=/Manguera\s+(\S+)/.exec(f[0]); if(m) r.cab[m[1]]=totalDe(f,esMax); });
+      if(esMax){
+        filas('#mangueras-summary-table').forEach(f=>{ const m=/^Manguera\s+(\S+)/.exec(f[0]); if(m) r.mang[m[1]]=totalDe(f,true); });
+      }else{
+        const cab=[...document.querySelectorAll('#mangueras-summary-table thead th')].map(th=>th.textContent.trim());
+        filas('#mangueras-summary-table').forEach(f=>{
+          if(/^TOTAL/.test(f[0])) cab.forEach((l,i)=>{ if(i>0&&i<cab.length-1&&f[i]!==undefined) r.mang[l]=num(f[i]); });
+          const m=/Manguera\s+(\S+)\s+—/.exec(f[0]); if(m) r.mang[m[1]]=num(f[f.length-1]);   // fijas
+        });
+      }
+      r.tarjetas=[...document.querySelectorAll('#summary-stats .stat-card')].map(c=>[c.querySelector('.stat-label')?.textContent.trim(),num(c.querySelector('.stat-value')?.textContent)]);
+      return r;
+    };
+    const tarjeta=(r,txt)=>{const t=r.tarjetas.find(([l])=>l&&l.toLowerCase().includes(txt));return t?t[1]:undefined;};
+    const comprobarRes=(label,st,esMax)=>{
+      const r=leerRes(esMax);
+      cmpMapa(label+' · micro',sinCeros(st.mics),sinCeros(r.mics));
+      SMCore.PIE_KEYS.forEach(k=>cmp(label+' · pie '+k,st.pies[k],r.pies[k]));
+      cmpMapa(label+' · cajetines',sinCeros(st.cajetines),sinCeros(r.caj));
+      cmpMapa(label+' · cables link',sinCeros(st.cables),sinCeros(r.cab));
+      cmpMapa(label+' · mangueras',sinCeros(st.mangueras),sinCeros(r.mang));
+      const sumaV=m=>Object.values(m||{}).reduce((a,b)=>a+b,0);
+      if(esMax){
+        cmp(label+' · TOTAL cajetines/día',st.totals.cajetines,r.cajTotal);
+        cmp(label+' · tarjeta micros',sumaV(st.mics),tarjeta(r,'micro'));
+        cmp(label+' · tarjeta pies',sumaV(st.pies),tarjeta(r,'pies'));
+        cmp(label+' · tarjeta cajetines',st.totals.cajetines,tarjeta(r,'cajetin'));
+        cmp(label+' · tarjeta cables',sumaV(st.cables),tarjeta(r,'cable'));
+      }else{
+        if(r.cajTotal!==null) cmp(label+' · TOTAL cajetines',st.totals.cajetines,r.cajTotal);
+        cmp(label+' · tarjeta micros',st.totals.mics,tarjeta(r,'micr'));
+        cmp(label+' · tarjeta DIs',st.di.mono+st.di.stereo,tarjeta(r,'di'));
+        cmp(label+' · tarjeta pies',st.totals.pies,tarjeta(r,'pies'));
+      }
+    };
+    _summaryActiveTab='all'; renderSummary();
+    comprobarRes(multi?'Resumen · Todos':'Resumen',SMCore.computeStats(S,S.artists),false);
+    if(multi){
+      _summaryActiveTab='max'; renderSummary();
+      comprobarRes('Resumen · Máximo',SMCore.computeFestivalMax(S),true);
+      dias.forEach((d,i)=>{ _summaryActiveTab='day-'+i; renderSummary();
+        comprobarRes('Resumen · '+nombreDia(i),SMCore.computeStats(S,d.artists),false); });
+    }
+  } finally {
+    _summaryActiveTab=tabRes; _loActiveTab=tabLO;
+    try{ renderSummary(); renderLoadOut(); }catch(e){}
+  }
 
-  // El total del festival nunca puede ser la SUMA de los días: eso infla el
-  // material. Debe ser el máximo de las jornadas. (El PDF lo hacía mal.)
-  (function(){
-    const o={normalize:n=>normalizeGearName(cleanForPDF(n))};
-    const dias=SMCore.groupByFestivalDate(S,false);
-    if(dias.length<2) return;
-    const porDia=dias.map(d=>SMCore.computeStats(S,d.artists,o));
-    SMCore.PIE_KEYS.forEach(k=>{
-      const maxDia=Math.max(...porDia.map(s=>s.pies[k]||0));
-      const sumaDias=porDia.reduce((s,x)=>s+(x.pies[k]||0),0);
-      const fest=SMCore.computeFestivalMax(S,o).pies[k]||0;
-      if(fest!==maxDia) difs.push({elemento:'máx festival pie '+k, dominio:fest, app:maxDia});
-      if(sumaDias>maxDia && fest===sumaDias)
-        difs.push({elemento:'pie '+k+' SUMA días en vez de máximo', dominio:maxDia, app:sumaDias});
-    });
-  })();
-
-  // Load Out: las filas deben salir completas, con key estable y sin categoría DI
-  // (el modelo de DI va en la casilla de micro y ya se cuenta ahí).
-  const loRows = buildLoadRows(computeLoadStats(S.artists));
-  cmp('loadout · filas sin key', loRows.filter(r=>!r.key).length, 0);
-  cmp('loadout · categoría DI duplicada', loRows.filter(r=>r.cat==='DI').length, 0);
-  cmp('loadout · keys repetidas', loRows.length - new Set(loRows.map(r=>r.key)).size, 0);
-
-  // Máximo del festival: cada fila debe ser >= la de cualquier día suelto.
-  const fm = SMCore.computeFestivalMax(S, {normalize:n=>normalizeGearName(cleanForPDF(n))});
-  fm.days.forEach(d=>{
-    Object.entries(d.stats.mics).forEach(([n,q])=>{
-      if(q > (fm.mics[n]||0)) difs.push({elemento:'máx festival · '+n, dominio:fm.mics[n]||0, app:q});
+  // ── PDF del Resumen ────────────────────────────────────────────────
+  // El PDF no se puede leer desde aquí: se comprueba con su misma fórmula que las
+  // columnas (bandas + "Fijos") cuadran con el total.
+  SMCore.groupByFestivalDate(S,false).forEach(d=>{
+    const dia=d.key==='__nodate__'?'sin fecha':d.key;
+    const rf=SMCore.resolveFijos(S,d.artists);
+    const cols=[...rf.efectivos,...rf.fijos].map(a=>SMCore.micsOf(a,optsLO));
+    const tot=SMCore.computeStats(S,d.artists,optsLO).mics;
+    const hayReut=d.artists.some(a=>a.reutilizable);
+    Object.keys(tot).forEach(nm=>{
+      const suma=cols.reduce((s,m)=>s+(m[nm]||0),0);
+      if(!hayReut) cmp('PDF resumen '+dia+' · '+nm,tot[nm],suma);
+      else if(tot[nm]>suma) difs.push({elemento:'PDF resumen '+dia+' · '+nm,dominio:tot[nm],pantalla:suma});
     });
   });
 
-  // Resumen material: el adaptador debe devolver exactamente lo que pinta la vista.
-  // Se comprueba día a día, que es como lo usan las pestañas.
-  SMCore.groupByFestivalDate(S, false).forEach(d=>{
-    const r = computeSummaryFor(d.artists);
-    const k = SMCore.computeStats(S, d.artists);
-    const dia = d.key==='__nodate__' ? 'sin fecha' : d.key;
-    new Set([...Object.keys(r.micCounts), ...Object.keys(k.mics)]).forEach(n=>
-      cmp('resumen '+dia+' · '+n, r.micCounts[n], k.mics[n]));
-    SMCore.PIE_KEYS.forEach(pk=>
-      cmp('resumen '+dia+' · pie '+pk, r.piesCounts[pk], k.pies[pk]));
-    Object.keys(k.mangueras).forEach(l=>{
-      cmp('resumen '+dia+' · manguera '+l,  r.mangueraCountByLetter[l], k.mangueras[l]);
-      cmp('resumen '+dia+' · cajetines '+l, r.cajetinesByLetter[l],     k.cajetines[l]);
-      cmp('resumen '+dia+' · cables '+l,    r.linkCablesByLetter[l],    k.cables[l]);
-    });
-  });
-
-  // Badges: el helper compartido debe coincidir con el cálculo directo canal a canal.
+  // ── Badges pintados ────────────────────────────────────────────────
   S.artists.forEach(a=>{
-    const b=artistBadgeStats(a);
-    cmp('badge DI-ST · '+a.nombre, b.diStereo, SMCore.stereoDiBoxes(a));
-    cmp('badge DI-M · '+a.nombre,  b.diMono,   a.channels.filter(c=>c.di==='M').length);
-    cmp('badge pies · '+a.nombre,  b.piesTotal,
-        a.channels.reduce((s,c)=>s+PIE_DEFS.filter(p=>c.pies?.[p.key]).length,0));
+    const el=document.getElementById('bm-'+a.id);
+    if(el) cmp('badge micros · '+a.nombre,artistBadgeStats(a).micros,num(el.textContent));
   });
 
-  console.log('%cArtistas: '+S.artists.length+' · Canales: '+S.artists.reduce((s,a)=>s+a.channels.length,0),'font-weight:bold');
+  // ── Avisos (no son diferencias de cifras) ──────────────────────────
+  const sinUso=SMCore.fijosSinUso(S);
+  if(sinUso.length){
+    console.log('%c⚠ Conectores anclados ⚓ que ninguna banda de ese día usa:','color:#f59e0b;font-weight:bold');
+    console.table(sinUso);
+  }
+
+  console.log('%cArtistas: '+S.artists.length+' · Canales: '+S.artists.reduce((s,a)=>s+a.channels.length,0)+' · Días: '+dias.length,'font-weight:bold');
   if(!difs.length){
-    console.log('%c✓ Todo cuadra: dominio y app dan los mismos números.','color:#1de9b6;font-weight:bold');
+    console.log('%c✓ Todo cuadra: lo que se ve en la Lista de carga y en el Resumen material es lo que calcula el dominio.','color:#1de9b6;font-weight:bold');
   }else{
-    console.log('%c⚠ '+difs.length+' diferencia(s):','color:#e94560;font-weight:bold');
+    console.log('%c⚠ '+difs.length+' diferencia(s) entre lo que se ve y lo que calcula el dominio:','color:#e94560;font-weight:bold');
     console.table(difs);
   }
   return difs;

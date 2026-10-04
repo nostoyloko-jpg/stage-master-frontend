@@ -152,7 +152,7 @@ console.log('\n─────────────────────�
 if (fallos === 0) {
   console.log('🎉 Todo OK.');
   console.log('   Esto no comprueba que la app se VEA bien: ábrela, entra en un par');
-  console.log('   de CH lists, mira Load Out y pasa smCheck() en la consola.');
+  console.log('   de CH lists, mira la Lista de carga y pasa smCheck() en la consola.');
 } else {
   console.log('⚠️  ' + fallos + ' comprobación(es) con problemas.');
   process.exit(1);

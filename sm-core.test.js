@@ -88,7 +88,7 @@ group('Exclusiones del recuento');
   eq(C.micsOf(artist({ channels: mics(['SM58', 'SM58', 'SM57']) })), { SM58: 2, SM57: 1 },
     'recuento base');
   eq(C.micsOf(artist({ channels: [...mics(['SM58']), ...mics(['SM58'], { premontado: true })] })),
-    { SM58: 1 }, '"ya montado" no se recuenta');
+    { SM58: 2 }, 'la marca manual "ya montado" (📌) ya no cuenta: lo decide el slot fijo ⚓');
   eq(C.micsOf(artist({ channels: mics(['SM58', C.PROPIO, 'XLR', 'xlr']) })), { SM58: 1 },
     'micro propio y XLR quedan fuera');
   eq(C.micsOf(artist({ channels: mics(['sm58', 'SM58']) }), { normalize: null }),
@@ -327,6 +327,119 @@ group('Datos sucios == datos limpios');
   // Normalizar dos veces no cambia nada (idempotencia)
   eq(C.normalizeState(C.normalizeState(sucio)), C.normalizeState(sucio),
      'normalizar es idempotente');
+}
+
+group('Slots fijos ⚓ (equipo montado y compartido por día)');
+{
+  const SAB = '2026-08-28', DOM = '2026-08-29';
+  const PA = { C: false, A: true, P: false, R: false };
+  const SIN = { C: false, A: false, P: false, R: false };
+  // Cada banda: un SM57 propio de la banda y un canal al conector F-5.
+  const banda = (fecha, o) => artist({ fecha, channels: [
+    ch({ micro: 'SM57', pies: { C: true }, subboxes: { A: '1' } }),
+    ch({ micro: 'SM58', pies: { A: true }, subboxes: { F: '5' } }),
+  ], ...o });
+  const lineaF = fijos => ({ fixedLines: [{ sbLetter: 'F', quantity: 1, fijos }] });
+
+  // Ejemplo de L.A.: sábado, F-5 anclado con SM58 y pie alto, lo usan 4 bandas.
+  {
+    const s = state({ sbConfig: lineaF({ [SAB]: { '5': { micro: 'SM58', di: '', pies: PA } } }),
+      artists: [banda(SAB), banda(SAB), banda(SAB), banda(SAB)] });
+    const r = C.computeStats(s, s.artists);
+    eq(r.mics, { SM57: 4, SM58: 1 }, '4 bandas en un slot fijo = 1 SM58 (el resto de canales suma normal)');
+    eq(r.pies, { C: 4, A: 1, P: 0, R: 0 }, 'y 1 pie alto, no 4');
+    eq(r.mangueras.F, 1, 'la línea fija sigue contando 1 manguera');
+  }
+
+  // El mismo patch el domingo, sin anclar: cada banda cuenta lo suyo.
+  {
+    const s = state({ sbConfig: lineaF({ [SAB]: { '5': { micro: 'SM58', di: '', pies: PA } } }),
+      artists: [banda(DOM), banda(DOM), banda(DOM), banda(DOM)] });
+    eq(C.computeStats(s, s.artists).mics.SM58, 4, 'el anclaje es por día: otro día el slot cuenta normal');
+  }
+
+  // Lo que manda es el slot, no lo que diga la CH list de cada banda.
+  {
+    const s = state({ sbConfig: lineaF({ [SAB]: { '5': { micro: 'KM184', di: '', pies: SIN } } }),
+      artists: [banda(SAB), banda(SAB)] });
+    const r = C.computeStats(s, s.artists);
+    eq([r.mics.KM184, r.mics.SM58 || 0, r.pies.A], [1, 0, 0], 'cuenta el equipo guardado en el slot');
+  }
+
+  // Anclado pero nadie lo usa: no cuenta, y se avisa.
+  {
+    const s = state({ sbConfig: lineaF({ [SAB]: { '9': { micro: 'SM58', di: '', pies: PA } } }),
+      artists: [banda(SAB)] });
+    const r = C.computeStats(s, s.artists);
+    eq([r.mics.SM58, r.pies.A], [1, 1], 'un slot anclado sin uso no añade material');
+    eq(C.fijosSinUso(s), [{ fecha: SAB, letter: 'F', slot: '9' }], 'y aparece en la lista de avisos');
+  }
+  {
+    const s = state({ sbConfig: lineaF({ [SAB]: { '5': { micro: 'SM58', di: '', pies: PA } } }),
+      artists: [banda(SAB)] });
+    eq(C.fijosSinUso(s), [], 'un slot anclado en uso no da aviso');
+  }
+
+  // DI estéreo anclada en dos conectores seguidos = 1 caja y 1 modelo.
+  {
+    const di = { micro: 'DI J48', di: 'ST', pies: SIN };
+    const s = state({ sbConfig: lineaF({ [SAB]: { '7': di, '8': di } }), artists: [
+      artist({ fecha: SAB, channels: [ch({ micro: 'DI J48', di: 'ST', subboxes: { F: '7' } }),
+                                      ch({ micro: 'DI J48', di: 'ST', subboxes: { F: '8' } })] }),
+      artist({ fecha: SAB, channels: [ch({ micro: 'DI J48', di: 'ST', subboxes: { F: '7' } }),
+                                      ch({ micro: 'DI J48', di: 'ST', subboxes: { F: '8' } })] }),
+    ] });
+    const r = C.computeStats(s, s.artists);
+    eq([r.di.stereo, r.mics['DI J48']], [1, 1], 'par L/R anclado en F-7 y F-8 = 1 caja estéreo');
+  }
+  {
+    const di = { micro: 'DI J48', di: 'ST', pies: SIN };
+    const s = state({ sbConfig: lineaF({ [SAB]: { '7': di, '9': di } }), artists: [
+      artist({ fecha: SAB, channels: [ch({ subboxes: { F: '7' } }), ch({ subboxes: { F: '9' } })] }),
+    ] });
+    eq(C.computeStats(s, s.artists).di.stereo, 2, 'conectores no seguidos no forman par');
+  }
+
+  // Reutilizables y cambio de día no alteran el slot fijo.
+  {
+    const s = state({ sbConfig: lineaF({ [SAB]: { '5': { micro: 'SM58', di: '', pies: PA } } }),
+      artists: [banda(SAB, { reutilizable: true }), banda(SAB, { reutilizable: true }), banda(SAB)] });
+    const r = C.computeStats(s, s.artists);
+    eq([r.mics.SM58, r.mics.SM57], [1, 2], 'con reutilizables: el slot cuenta 1; SM57 = 1 + máx(1,1)');
+  }
+  {
+    const s = state({ sbConfig: lineaF({ [SAB]: { '5': { micro: 'SM58', di: '', pies: PA } } }),
+      artists: [banda(DOM, { inicio: '02:00' }), banda(SAB)] });
+    eq(C.computeStats(s, s.artists).mics.SM58, 1, 'un show de las 02:00 usa el anclaje del día anterior');
+  }
+
+  // Máximo del festival: el slot cuenta 1 cada día que está anclado.
+  {
+    const s = state({ sbConfig: lineaF({
+        [SAB]: { '5': { micro: 'SM58', di: '', pies: PA } },
+        [DOM]: { '5': { micro: 'SM58', di: '', pies: PA } } }),
+      artists: [banda(SAB), banda(SAB), banda(DOM), banda(DOM), banda(DOM)] });
+    eq(C.computeFestivalMax(s).mics.SM58, 1, 'anclado los dos días: máximo del festival = 1');
+  }
+
+  // La CH list pregunta canal a canal si va a un conector anclado.
+  {
+    const s = state({ sbConfig: lineaF({ [SAB]: { '5': { micro: 'SM58', di: '', pies: PA } } }) });
+    const b = banda(SAB), d = banda(DOM);
+    eq([!!C.fijoDeCanal(s, b, b.channels[1]), !!C.fijoDeCanal(s, b, b.channels[0]), !!C.fijoDeCanal(s, d, d.channels[1])],
+       [true, false, false], 'fijoDeCanal: sí en F-5 el sábado; no en otra manguera ni otro día');
+  }
+
+  // Datos sucios: conector como número, booleanos como texto, di en minúscula.
+  {
+    const limpio = state({ sbConfig: lineaF({ [SAB]: { '5': { micro: 'SM58', di: 'ST', pies: PA } } }),
+      artists: [banda(SAB), banda(SAB)] });
+    const sucio = state({ sbConfig: { fixedLines: [{ sbLetter: 'f', quantity: '1',
+        fijos: { [SAB]: { 5: { micro: ' SM58 ', di: 'st', pies: { A: 'true', C: 'false' } } } } }] },
+      artists: [banda(SAB), banda(SAB)] });
+    const L = C.normalizeState(limpio), S2 = C.normalizeState(sucio);
+    eq(C.computeStats(S2, S2.artists), C.computeStats(L, L.artists), 'fijos sucios dan lo mismo que limpios');
+  }
 }
 
 group('Robustez ante datos mal tipados');
