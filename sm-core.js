@@ -628,39 +628,6 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // CACHÉ DE SELECTORES
-  // ═══════════════════════════════════════════════════════════════════
-
-  /**
-   * computeStats recorre todos los canales de todos los artistas y lo llaman
-   * varias vistas en el mismo render. Esta caché lo reduce a un cálculo por
-   * cambio de estado: el llamante sube `version` al mutar el estado.
-   */
-  function createSelectors() {
-    let version = -1;
-    const cache = new Map();
-    const memo = (key, fn) => {
-      if (!cache.has(key)) cache.set(key, fn());
-      return cache.get(key);
-    };
-    return {
-      invalidate(v) { if (v !== version) { version = v; cache.clear(); } },
-      statsForDay(state, dayKey, opts) {
-        return memo(`day:${dayKey}`, () => {
-          const g = groupByFestivalDate(state, false).find(d => d.key === dayKey);
-          return computeStats(state, g ? g.artists : [], opts);
-        });
-      },
-      statsForAll(state, opts) {
-        return memo('all', () => computeStats(state, state.artists || [], opts));
-      },
-      festivalMax(state, opts) {
-        return memo('max', () => computeFestivalMax(state, opts));
-      },
-    };
-  }
-
-  // ═══════════════════════════════════════════════════════════════════
   return {
     PROPIO, PIE_KEYS,
     // calendario
@@ -677,7 +644,5 @@
     normalizeFijos, fijoDeCanal, resolveFijos, fijosSinUso, fijosVacios,
     // agregados
     computeStats, computeFestivalMax, buildLoadOutRows,
-    // infraestructura
-    createSelectors,
   };
 });

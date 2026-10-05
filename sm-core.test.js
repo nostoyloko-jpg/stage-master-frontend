@@ -202,18 +202,6 @@ group('Filas de Load Out');
 }
 
 // ═══════════════════════════════════════════════════════════════════
-group('Caché de selectores');
-{
-  const s = state({ artists: [artist({ channels: mics(['SM58']) })] });
-  const sel = C.createSelectors();
-  sel.invalidate(1);
-  const a = sel.statsForAll(s);
-  eq(sel.statsForAll(s) === a, true, 'misma versión → misma instancia (sin recalcular)');
-  sel.invalidate(2);
-  eq(sel.statsForAll(s) === a, false, 'nueva versión → recalcula');
-}
-
-// ═══════════════════════════════════════════════════════════════════
 group('Normalización de tipos');
 {
   // [REGRESIÓN] Id de sistema numérico contra texto: Set.has fallaba y cada

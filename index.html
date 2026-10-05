@@ -170,6 +170,7 @@ body.light .badge-amber{background:rgba(192,120,0,0.1);}
 .cs-inp{width:34px!important;min-width:34px;}
 .instr-inp{min-width:160px;}
 .micro-inp{min-width:95px;}
+.micro-sel.micro-falta{color:var(--accent,#e94560);font-weight:600;}
 .print-val{display:none;font-size:11px;color:inherit;padding:1px 2px;}.obs-inp{min-width:180px;resize:none;overflow:hidden;line-height:1.4;min-height:22px;height:22px;vertical-align:middle;text-transform:uppercase;}
 
 /* SUMMARY */
@@ -1368,39 +1369,6 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // CACHÉ DE SELECTORES
-  // ═══════════════════════════════════════════════════════════════════
-
-  /**
-   * computeStats recorre todos los canales de todos los artistas y lo llaman
-   * varias vistas en el mismo render. Esta caché lo reduce a un cálculo por
-   * cambio de estado: el llamante sube `version` al mutar el estado.
-   */
-  function createSelectors() {
-    let version = -1;
-    const cache = new Map();
-    const memo = (key, fn) => {
-      if (!cache.has(key)) cache.set(key, fn());
-      return cache.get(key);
-    };
-    return {
-      invalidate(v) { if (v !== version) { version = v; cache.clear(); } },
-      statsForDay(state, dayKey, opts) {
-        return memo(`day:${dayKey}`, () => {
-          const g = groupByFestivalDate(state, false).find(d => d.key === dayKey);
-          return computeStats(state, g ? g.artists : [], opts);
-        });
-      },
-      statsForAll(state, opts) {
-        return memo('all', () => computeStats(state, state.artists || [], opts));
-      },
-      festivalMax(state, opts) {
-        return memo('max', () => computeFestivalMax(state, opts));
-      },
-    };
-  }
-
-  // ═══════════════════════════════════════════════════════════════════
   return {
     PROPIO, PIE_KEYS,
     // calendario
@@ -1417,8 +1385,6 @@ body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
     normalizeFijos, fijoDeCanal, resolveFijos, fijosSinUso, fijosVacios,
     // agregados
     computeStats, computeFestivalMax, buildLoadOutRows,
-    // infraestructura
-    createSelectors,
   };
 });
 </script>
@@ -2847,16 +2813,39 @@ function updSBInfo(){
   const df=S.event.fechaFin||'';
   document.getElementById('sb-event-date').textContent=di?(df&&df!==di?fmtDate(di)+' — '+fmtDate(df):fmtDate(di)):'—';
 }
-function rebuildMSel(sel){
-  sel.innerHTML='<option value="">—</option>'+
-    S.micros.map(m=>`<option value="${esc(m.nombre)}">${esc(m.nombre)}</option>`).join('');
+/** Devuelve el nombre si el micro no está en el inventario; null si está, si es propio o si no hay micro. */
+function microFueraInventario(nombre){
+  const n=String(nombre||'');
+  if(!n||n==='__PROPIO__')return null;
+  return S.micros.some(m=>(typeof m==='string'?m:m.nombre)===n)?null:n;
 }
+/** Opciones del desplegable de micro de un canal. Un micro que no está en el inventario
+ *  se enseña igual (en rojo) en vez de "—": el canal lo conserva y la Lista de carga lo cuenta. */
+function microOptsHTML(cur){
+  cur=String(cur||'');
+  const falta=microFueraInventario(cur);
+  return '<option value="">—</option>'
+    +`<option value="__PROPIO__" ${cur==='__PROPIO__'?'selected':''} style="color:var(--blue,#4fc3f7);font-style:italic">🎤 Propio</option>`
+    +(falta?`<option value="${esc(falta)}" selected data-falta="1" style="color:var(--accent,#e94560)">⚠ ${esc(falta)} (no está en inventario)</option>`:'')
+    +S.micros.map(m=>{const nm=typeof m==='string'?m:m.nombre;return`<option value="${esc(nm)}"${cur===nm?' selected':''}>${esc(nm)}</option>`;}).join('');
+}
+function rebuildMSel(sel){
+  const a=S.artists.find(x=>String(x.id)===String(sel.dataset.aid));
+  const ch=a?.channels?.[+sel.dataset.row];
+  const cur=ch?String(ch.micro||''):sel.value;
+  sel.innerHTML=microOptsHTML(cur);
+  sel.value=cur;
+  const falta=!!microFueraInventario(cur);
+  sel.classList.toggle('micro-falta',falta);
+  sel.title=falta?'Este micro no está en el inventario, pero el canal lo conserva y se cuenta en la Lista de carga':'';
+}
+function refreshMicroSelects(){document.querySelectorAll('.micro-sel').forEach(rebuildMSel);}
 function addMicro(){
   if(S.micLocked)return;
   // Insert at beginning (unsorted) so it appears first for immediate editing
   S.micros.unshift({nombre:'',tipo:'dinamico',patron:'cardioide',phantom:false});
   renderMicroList();
-  document.querySelectorAll('.micro-sel').forEach(sel=>{const v=sel.value;rebuildMSel(sel);sel.value=v;});
+  refreshMicroSelects();
   // Focus first name input
   setTimeout(()=>{const inp=document.querySelector('#micro-tbody tr:first-child input[type=text]');if(inp){inp.focus();inp.select();}},60);
   SM_STORE.setMicros(S.micros)
@@ -2864,8 +2853,21 @@ function addMicro(){
 }
 function delMicro(idx){
   if(S.micLocked)return;
+  const m=S.micros[idx];
+  if(!m)return;
+  const nombre=typeof m==='string'?m:m.nombre;
+  const quedaOtro=S.micros.some((x,j)=>j!==idx&&(typeof x==='string'?x:x.nombre)===nombre);
+  const usan=[];let nCh=0;
+  if(nombre&&!quedaOtro){
+    S.artists.forEach(a=>{const n=(a.channels||[]).filter(ch=>ch.micro===nombre).length;if(n){usan.push(a);nCh+=n;}});
+  }
+  if(nCh){
+    const lista=usan.slice(0,8).map(a=>'• '+a.nombre).join('\n')+(usan.length>8?`\n… y ${usan.length-8} más`:'');
+    if(!confirm(`"${nombre}" lo usan ${nCh} canal${nCh>1?'es':''} en ${usan.length} banda${usan.length>1?'s':''}:\n${lista}\n\n¿Borrarlo del inventario?\nLos canales lo conservan: saldrá en rojo como "no está en inventario" y se seguirá contando en la Lista de carga.`))return;
+  }
   S.micros.splice(idx,1);
-  document.querySelectorAll('.micro-sel').forEach(sel=>{const v=sel.value;rebuildMSel(sel);sel.value=v;});
+  usan.forEach(a=>invalidateArtistPage(a.id));
+  refreshMicroSelects();
   SM_STORE.setMicros(S.micros)
   renderMicroList();saveS();
 }
@@ -2876,7 +2878,7 @@ function updMicroField(idx,field,value){
     S.micros.sort((a,b)=>a.nombre.localeCompare(b.nombre));
     renderMicroList();
   }
-  document.querySelectorAll('.micro-sel').forEach(sel=>{const v=sel.value;rebuildMSel(sel);sel.value=v;});
+  refreshMicroSelects();
   SM_STORE.setMicros(S.micros)
   saveS();
 }
@@ -3353,9 +3355,7 @@ function buildArtistPage(a){
         return `<td class="sb-td-${si} sb-sub-col" style="background:${hex2rgba(sb.color,0.18)};white-space:nowrap;${anc?'box-shadow:inset 0 0 0 2px var(--amber,#f59e0b)':''}"${anc?` title="${ancTit}"`:''}><input type="text" class="sb-inp" value="${esc(val)}" placeholder="—" oninput="updCh(${a.id},${i},'sb_${sb.letter}',this.value)" data-row="${i}" data-col="sb${si}" data-aid="${a.id}" data-chidx="${i}" tabindex="0">${anclaBtn(sb,val)}<span class="print-val">${esc(val)}</span></td>`;
       }
     }).join('');
-    const mOpts='<option value="">—</option>'
-      +`<option value="__PROPIO__" ${ch.micro==='__PROPIO__'?'selected':''} style="color:var(--blue,#4fc3f7);font-style:italic">🎤 Propio</option>`
-      +S.micros.map(m=>{const nm=typeof m==='string'?m:m.nombre;return`<option value="${esc(nm)}"${ch.micro===nm?' selected':''}>${esc(nm)}</option>`;}).join('');
+    const mOpts=microOptsHTML(ch.micro);
     // Build simple-mode subbox summary pills
     const sbPills=sbs.map(sb=>{
       const val=String(ch.subboxes?.[sb.letter]||'').trim();
@@ -3382,7 +3382,7 @@ function buildArtistPage(a){
       </td>`;
       mergedCellsHtml = `
       <td style="position:relative${ch.micro==='__PROPIO__'?';background:rgba(79,195,247,0.07)':''}"${rs}>
-        <select class="micro-sel micro-inp" style="${isLinkedFromPrev?'opacity:.5':''}${ch.micro==='__PROPIO__'?';color:var(--blue,#4fc3f7);font-style:italic;font-weight:600':''}" onchange="updCh(${a.id},${i},'micro',this.value)" data-row="${i}" data-col="micro">${mOpts}</select>
+        <select class="micro-sel micro-inp${microFueraInventario(ch.micro)?' micro-falta':''}" style="${isLinkedFromPrev?'opacity:.5':''}${ch.micro==='__PROPIO__'?';color:var(--blue,#4fc3f7);font-style:italic;font-weight:600':''}"${microFueraInventario(ch.micro)?' title="Este micro no está en el inventario, pero el canal lo conserva y se cuenta en la Lista de carga"':''} onchange="updCh(${a.id},${i},'micro',this.value)" data-aid="${a.id}" data-row="${i}" data-col="micro">${mOpts}</select>
         ${ch.phantom?`<span title="48V phantom" style="position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:50%;background:var(--amber,#f59e0b);opacity:.9;pointer-events:none"></span>`:''}
         ${isPairMaster?`<div style="font-size:8px;color:var(--blue);margin-top:2px;text-align:center;opacity:.75">↕ par ST (ch${i+1}-${i+2})</div>`:''}
         <span class="print-val">${ch.micro==='__PROPIO__'?'Propio':esc(ch.micro||'')}</span>
@@ -3768,6 +3768,11 @@ function updCh(aid,idx,field,value){
     }
   }
   else ch[field]=value;
+  // Si el canal tenía un micro fuera del inventario y se cambia, el aviso rojo desaparece.
+  if(field==='micro'){
+    const msel=document.querySelector(`.micro-sel[data-aid="${aid}"][data-row="${idx}"]`);
+    if(msel&&(msel.classList.contains('micro-falta')||msel.querySelector('option[data-falta]')))rebuildMSel(msel);
+  }
   // auto-set phantom when micro selected
   if(field==='micro'&&value){
     const mObj=S.micros.find(m=>m.nombre===value);
@@ -7959,7 +7964,7 @@ function importMicroInventory(input){
       // Save globally
       SM_STORE.setMicros(S.micros)
       saveS();renderMicroList();updMicLockUI();
-      document.querySelectorAll('.micro-sel').forEach(sel=>{const v=sel.value;rebuildMSel(sel);sel.value=v;});
+      refreshMicroSelects();
     }catch(err){alert('Error importando inventario: '+err.message);}
   };
   reader.readAsText(file);input.value='';
@@ -10093,6 +10098,29 @@ function escXml(s){
   return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+// Rejilla de la página "Resumen Cajetines" del PDF. Las filas y conectores de los cajetines son
+// configurables, así que la rejilla (columnas × filas) se elige según el tamaño real de cada
+// cajetín y cuántos hay que colocar. Criterio: 1º menos páginas; 2º cajetines lo más grandes
+// posible (con tope); nunca más pequeños que SB_MIN_SCALE (la escala que había antes).
+// SB_BOTTOM reserva el hueco del pie de página (línea en ph-6, texto en ph-4).
+const SB_PAD=3, SB_TOP=21, SB_BOTTOM=10, SB_MIN_SCALE=0.17, SB_MAX_SCALE=0.40;
+function pickSbGrid(n, sw, sh, pw, ph, m){
+  const areaW=pw-m*2, areaH=ph-SB_TOP-SB_BOTTOM;
+  const cands=[];
+  for(let cols=1;cols<=4;cols++){
+    for(let rows=1;rows<=3;rows++){
+      const scale=Math.min((areaW/cols-SB_PAD*2)/sw, (areaH/rows-SB_PAD*2)/sh);
+      if(scale>0) cands.push({cols, rows, scale, eff:Math.min(scale,SB_MAX_SCALE), pages:Math.ceil(n/(cols*rows))});
+    }
+  }
+  if(!cands.length) return {cols:1, rows:1, scale:SB_MIN_SCALE, eff:SB_MIN_SCALE, pages:n, areaW, areaH};
+  const ok=cands.filter(c=>c.scale>=SB_MIN_SCALE);
+  // Si ninguna rejilla alcanza la escala mínima (cajetín enorme), se usa la de mayor escala.
+  const pool=ok.length ? ok : [cands.reduce((a,b)=>b.scale>a.scale?b:a)];
+  pool.sort((a,b)=> a.pages-b.pages || b.eff-a.eff || (a.cols*a.rows)-(b.cols*b.rows));
+  return {...pool[0], areaW, areaH};
+}
+
 // Build subbox SVG for PDF — print-safe, no CSS vars
 function buildSubboxSvgForPdf(sb, slots){
   const cfg=S.sbConfig||{rows:2,cols:8};
@@ -10119,11 +10147,11 @@ function buildSubboxSvgForPdf(sb, slots){
       const info=slots[slot];
       const has=info&&info.instrumento;
 
-      svg+=`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${has?colFull:'#f5f5f5'}" stroke="${has?sb.color:'#ccc'}" stroke-width="${has?2:1}"/>`;
-      svg+=`<circle cx="${cx}" cy="${cy}" r="${r-6}" fill="none" stroke="${has?`rgba(${cr},${cg},${cb},0.3)`:'#e5e5e5'}" stroke-width="1"/>`;
+      svg+=`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${has?colFull:'#f5f5f5'}" stroke="${has?sb.color:'#b5b5b5'}" stroke-width="${has?2.5:1.5}"/>`;
+      svg+=`<circle cx="${cx}" cy="${cy}" r="${r-6}" fill="none" stroke="${has?`rgba(${cr},${cg},${cb},0.3)`:'#d0d0d0'}" stroke-width="1.2"/>`;
       // XLR pin dots
       [[-7,-5],[7,-5],[0,8]].forEach(([px,py])=>{
-        svg+=`<circle cx="${cx+px}" cy="${cy+py}" r="2.5" fill="${has?'rgba(0,0,0,0.3)':'#ccc'}"/>`;
+        svg+=`<circle cx="${cx+px}" cy="${cy+py}" r="2.5" fill="${has?'rgba(0,0,0,0.3)':'#b5b5b5'}"/>`;
       });
 
       if(has){
@@ -10162,7 +10190,7 @@ function buildSubboxSvgForPdf(sb, slots){
   return {svg, width:svgW, height:svgH};
 }
 
-async function svgToDataUrl(svgString, width, height){
+async function svgToDataUrl(svgString, width, height, scale=2){
   const blob=new Blob([svgString],{type:'image/svg+xml;charset=utf-8'});
   const url=URL.createObjectURL(blob);
   try{
@@ -10170,7 +10198,7 @@ async function svgToDataUrl(svgString, width, height){
       const im=new Image(); im.onload=()=>res(im); im.onerror=()=>rej(new Error('SVG load failed')); im.src=url;
     });
     const canvas=document.createElement('canvas');
-    canvas.width=width*2; canvas.height=height*2;
+    canvas.width=Math.round(width*scale); canvas.height=Math.round(height*scale);
     const ctx=canvas.getContext('2d');
     ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,canvas.width,canvas.height);
     ctx.drawImage(img,0,0,canvas.width,canvas.height);
@@ -10372,20 +10400,33 @@ async function runPdfExport(){
   pdf.text(subParts.join('   |   '), 14, 56);
   pdf.setDrawColor(...GRAY3); pdf.setLineWidth(0.4);
   pdf.line(14, 61, PW-14, 61);
-  // Artists list
+  // Pie de la portada (va en la primera página, antes de la lista)
+  pdf.setFontSize(7); pdf.setTextColor(...GRAY3);
+  pdf.text(`v${S.version||'1'}  |  Generado ${new Date().toLocaleDateString('es-ES')}`, 14, PH-8);
+  pdf.text('(c) Luis Anton  lag.sound@gmail.com', PW-14, PH-8, {align:'right'});
+  // Artists list — si no caben, sigue en una página nueva (antes se reiniciaba `ay` en la
+  // misma página y los artistas a partir del 15 se pintaban encima de los primeros)
   pdf.setFontSize(9); let ay=72;
   S.artists.forEach((a,i)=>{
+    if(ay>PH-20){
+      pdf.addPage([PW,PH],'l');
+      pdf.setFillColor(...BG); pdf.rect(0,0,PW,PH,'F');
+      pdf.setFillColor(...ACCENT); pdf.rect(0,0,4,PH,'F');
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(...BLACK);
+      pdf.text(cleanForPDF(S.event.nombre||'Channel List')+'  (cont.)', 14, 18);
+      pdf.setDrawColor(...GRAY3); pdf.setLineWidth(0.4);
+      pdf.line(14, 23, PW-14, 23);
+      pdf.setFontSize(9);
+      ay=34;
+    }
     pdf.setFont('helvetica','bold'); pdf.setTextColor(...ACCENT);
     pdf.text(String(i+1).padStart(2,'0'), 14, ay);
     pdf.setTextColor(...BLACK);
     pdf.text(cleanForPDF(a.nombre), 26, ay);
     pdf.setFont('helvetica','normal'); pdf.setTextColor(...GRAY3);
     pdf.text(`${a.canales} ch   ${timeRange(a.inicio,a.fin)}`, PW-14, ay, {align:'right'});
-    ay+=9; if(ay>PH-20) ay=72;
+    ay+=9;
   });
-  pdf.setFontSize(7); pdf.setTextColor(...GRAY3);
-  pdf.text(`v${S.version||'1'}  |  Generado ${new Date().toLocaleDateString('es-ES')}`, 14, PH-8);
-  pdf.text('(c) Luis Anton  lag.sound@gmail.com', PW-14, PH-8, {align:'right'});
 
   // Portada divisoria: una página por sección con el nombre del festival y el apartado.
   // Sirve tanto para exportaciones de una sola sección como de separador en el reporte completo.
@@ -10892,8 +10933,10 @@ async function runPdfExport(){
         }
         if(!artistSbItems.length) continue;
 
-        // Page per artist — 3 cols x 2 rows per page
-        const COLS=2, ROWS=3, PER_PAGE=COLS*ROWS;
+        // Rejilla dinámica: depende del tamaño real del cajetín (filas × conectores) y de cuántos hay
+        const _dim=buildSubboxSvgForPdf(artistSbItems[0].sb, {});
+        const grid=pickSbGrid(artistSbItems.length, _dim.width, _dim.height, PW, PH, M);
+        const COLS=grid.cols, ROWS=grid.rows, PER_PAGE=COLS*ROWS;
         for(let pageStart=0; pageStart<artistSbItems.length; pageStart+=PER_PAGE){
           const pageItems=artistSbItems.slice(pageStart, pageStart+PER_PAGE);
 
@@ -10911,30 +10954,36 @@ async function runPdfExport(){
             pdf.text(`(cont.)`, M+pdf.getTextWidth(a.nombre)+4, 15);
           }
 
-          const cellW=(PW-M*2)/COLS;
-          const cellH=(PH-22)/ROWS;
-          const cellPad=3;
+          // La rejilla ocupa de SB_TOP hasta ph-SB_BOTTOM: el pie de página queda libre
+          const cellW=grid.areaW/COLS;
+          const cellH=grid.areaH/ROWS;
+          const cellPad=SB_PAD;
+          const usedRows=Math.ceil(pageItems.length/COLS);
+          const yShift=(ROWS-usedRows)*cellH/2;   // centra en vertical si sobran filas
 
           for(let idx=0; idx<pageItems.length; idx++){
             const {sb, slots}=pageItems[idx];
             const col=idx%COLS;
             const row=Math.floor(idx/COLS);
-            const cellX=M+col*cellW;
-            const cellY=21+row*cellH;
+            const inRow=Math.min(COLS, pageItems.length-row*COLS);
+            const xShift=(COLS-inRow)*cellW/2;    // centra la última fila si está incompleta
+            const cellX=M+col*cellW+xShift;
+            const cellY=SB_TOP+yShift+row*cellH;
 
             prog.textContent=`Generando ${a.nombre} — Manguera ${sb.letter}...`;
             await new Promise(r=>setTimeout(r,5));
 
             const {svg, width:sw, height:sh}=buildSubboxSvgForPdf(sb, slots);
-            let imgData;
-            try{ imgData=await svgToDataUrl(svg, sw, sh); }
-            catch(e){ console.warn('SVG failed',sb.letter,e); continue; }
-
             const availW=cellW-cellPad*2;
             const availH=cellH-cellPad*2;
-            const ratio=sh/sw;
-            let imgW=availW, imgH=imgW*ratio;
-            if(imgH>availH){ imgH=availH; imgW=imgH/ratio; }
+            const scale=Math.min(availW/sw, availH/sh, SB_MAX_SCALE);
+            const imgW=sw*scale, imgH=sh*scale;
+            // Resolución del raster: ~300 ppp según el tamaño final en la página (entre 2× y 4×)
+            const rasterScale=Math.max(2, Math.min(4, Math.ceil(imgW*11.8/sw)));
+            let imgData;
+            try{ imgData=await svgToDataUrl(svg, sw, sh, rasterScale); }
+            catch(e){ console.warn('SVG failed',sb.letter,e); continue; }
+
             const imgX=cellX+cellPad+(availW-imgW)/2;
             const imgY=cellY+cellPad+(availH-imgH)/2;
 
