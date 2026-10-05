@@ -1814,20 +1814,27 @@ self.addEventListener('fetch',e=>e.respondWith(
     <div class="acc" data-acc="apariencia">
       <div class="acc-h" role="button" tabindex="0" aria-expanded="false" onclick="toggleAcc(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleAcc(this)}">
         <span class="acc-tile" style="--t1:#8b93a7;--t2:#5b6377"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5 2.5 6.5 10 10.5l7.5-4z"/><path d="M2.5 10l7.5 4 7.5-4"/><path d="M2.5 13.5l7.5 4 7.5-4"/></svg></span>
-        <span class="acc-tx"><span class="acc-title">Apariencia</span><span class="acc-sub">Paleta de colores y modo Día/Noche</span></span>
+        <span class="acc-tx"><span class="acc-title">Apariencia</span><span class="acc-sub">Paleta de la app y ventana Live</span></span>
         <span class="acc-chev"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4"/></svg></span>
       </div>
       <div class="acc-b">
       <div class="card acc-solo">
         <div class="card-header"><span class="card-title">Apariencia</span></div>
         <div class="card-body">
-          <div class="field-label" style="margin-bottom:8px">Paleta de colores (el botón ☀/☾ de la barra sigue cambiando Día/Noche)</div>
+          <div class="field-label" style="margin-bottom:8px">Paleta de la app</div>
           <div class="pal-grid" id="cfg-palette">
             <button type="button" class="pal-opt" data-pal="clasico" onclick="setPalette('clasico')"><span class="pal-sw"><i style="background:#13161d"></i><i style="background:#e94560"></i></span>Clásico</button>
             <button type="button" class="pal-opt" data-pal="escenario" onclick="setPalette('escenario')"><span class="pal-sw"><i style="background:#000"></i><i style="background:#ffd60a"></i></span>Escenario (alto contraste)</button>
             <button type="button" class="pal-opt" data-pal="neutro" onclick="setPalette('neutro')"><span class="pal-sw"><i style="background:#1e1f22"></i><i style="background:#8ab4f8"></i></span>Neutro</button>
             <button type="button" class="pal-opt" data-pal="raycast" onclick="setPalette('raycast')"><span class="pal-sw"><i style="background:#07080a"></i><i style="background:#ff6363"></i></span>Raycast</button>
           </div>
+        <div class="field-label" style="margin:16px 0 8px">Ventana Live</div>
+        <div class="pal-grid" id="cfg-livestyle">
+          <button type="button" class="pal-opt" data-lv="clasico" onclick="setLiveStyle('clasico')"><span class="pal-sw"><i style="background:#0d0f14"></i><i style="background:#e94560"></i></span>Clásico</button>
+          <button type="button" class="pal-opt" data-lv="escenario" onclick="setLiveStyle('escenario')"><span class="pal-sw"><i style="background:#000"></i><i style="background:#FFD600"></i></span>Escenario (alto contraste)</button>
+          <button type="button" class="pal-opt" data-lv="neutro" onclick="setLiveStyle('neutro')"><span class="pal-sw"><i style="background:#121213"></i><i style="background:#8ab4f8"></i></span>Neutro</button>
+          <button type="button" class="pal-opt" data-lv="raycast" onclick="setLiveStyle('raycast')"><span class="pal-sw"><i style="background:#000"></i><i style="background:#ff6363"></i></span>Raycast</button>
+        </div>
         </div>
       </div>
       </div>
@@ -2903,6 +2910,16 @@ function applyPalette(){
   document.querySelectorAll('#cfg-palette .pal-opt').forEach(b=>b.classList.toggle('on',b.dataset.pal===palette));
 }
 function setPalette(p){palette=p;SM_STORE.setSetting('palette',p);applyPalette();}
+// ── ESTILO DE LA VENTANA LIVE ──
+let liveStyle=SM_STORE.getSetting('liveStyle','clasico');
+{const _old={oled:'raycast',ambar:'escenario'}[liveStyle];if(_old){liveStyle=_old;SM_STORE.setSetting('liveStyle',_old);}}   // nombres antiguos
+function applyLiveStyleUI(){document.querySelectorAll('#cfg-livestyle .pal-opt').forEach(b=>b.classList.toggle('on',b.dataset.lv===liveStyle));}
+function setLiveStyle(v){
+  liveStyle=v;SM_STORE.setSetting('liveStyle',v);applyLiveStyleUI();
+  // Ventana Live abierta: se cambia al momento (directo y por BroadcastChannel)
+  try{if(_liveWin&&!_liveWin.closed&&_liveWin.applyLiveStyle)_liveWin.applyLiveStyle(v);}catch(e){}
+  try{const bc=new BroadcastChannel('sm-live');bc.postMessage({type:'lvStyle',v});bc.close();}catch(e){}
+}
 // ── ACORDEONES DE CONFIGURACIÓN ──
 const ACC_DEFAULT={apariencia:true,evento:true,lineup:false,mangueras:false,inventario:false};
 function _accState(){const v=SM_STORE.getSetting('cfgAcc',null);return Object.assign({},ACC_DEFAULT,(v&&typeof v==='object')?v:{});}
@@ -2923,6 +2940,7 @@ window.onload=function(){
   SM_STORE.migrate(); // migrate legacy localStorage keys to sm.* namespace — runs once
   applyTheme();
   applyPalette();
+  applyLiveStyleUI();
   applyAcc();
   applyMode();
   applyLang();
@@ -4648,7 +4666,9 @@ function liveWindowScript(){
   function resetTimeOffset(){ setTimeOffset(0); }
 
 
-  const ACCENT=D.accent;
+  // Estilo de la ventana (Clásico, Escenario, Neutro, Raycast). El acento cambia con él.
+  const LV_ACCENT={clasico:D.accent,escenario:'#FFD600',neutro:'#8ab4f8',raycast:'#ff6363'};
+  let ACCENT=LV_ACCENT[D.lvStyle]||D.accent;
   // Minutos visibles en las barras. Ajustable con los botones de zoom (esquina inf. derecha).
   const ZOOM_STEPS=[20,30,45,60,90,120,180,240,360];
   let _zIdx=(()=>{try{const v=parseInt(localStorage.getItem('smlive.zoom'));return (v>=0&&v<ZOOM_STEPS.length)?v:3;}catch(e){return 3;}})();
@@ -5109,6 +5129,21 @@ function liveWindowScript(){
   window.startResize  = startResize;
   window.dismissCall  = dismissCall;
   window.tickFromParent=function(){tick();};
+  // Cambio de estilo en caliente: lo llama la ventana principal directamente y,
+  // por si acaso, llega también por BroadcastChannel y por el evento storage.
+  function applyLiveStyle(v){
+    if(v==='oled')v='raycast';      // nombres antiguos
+    if(v==='ambar')v='escenario';
+    if(!LV_ACCENT[v])v='clasico';
+    if(v==='clasico')document.body.removeAttribute('data-lv');else document.body.setAttribute('data-lv',v);
+    ACCENT=LV_ACCENT[v];
+    const l0=document.getElementById('lbl-0');if(l0)l0.style.color=ACCENT;
+    tick();
+  }
+  window.applyLiveStyle=applyLiveStyle;
+  applyLiveStyle(D.lvStyle||'clasico');
+  try{const bc=new BroadcastChannel('sm-live');bc.onmessage=e=>{if(e.data&&e.data.type==='lvStyle')applyLiveStyle(e.data.v);};}catch(e){}
+  window.addEventListener('storage',e=>{if(e.key!=='sm.settings')return;try{const v=JSON.parse(e.newValue||'{}').liveStyle;if(v)applyLiveStyle(v);}catch(err){}});
 
   // Arrastre horizontal: ancho del panel de info
   function startResize(e){
@@ -5327,6 +5362,69 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 .callok{flex:0 0 auto;align-self:center;padding:8px 14px;border-radius:7px;border:1px solid rgba(255,179,71,.55);background:rgba(255,179,71,.16);color:#ffb347;font-size:min(4.5cqw,1.8vh);font-weight:900;letter-spacing:1px;cursor:pointer;animation:none}
 .callok:hover{background:#ffb347;color:#111}
 #panel-call.hot{border-color:rgba(255,179,71,.6);box-shadow:0 0 0 1px rgba(255,179,71,.25) inset}
+/* ── Estilos de la ventana Live (Configuración → Apariencia). Clásico = sin data-lv ── */
+body[data-lv="raycast"]{background:#000;color:#fff}
+body[data-lv="raycast"] #top{background:#000;border-bottom:1px solid rgba(255,255,255,.14)}
+body[data-lv="raycast"] .tpanel{background:#050505;border:1px solid rgba(255,255,255,.12);border-radius:10px;box-shadow:inset 0 1px 0 rgba(255,255,255,.06)}
+body[data-lv="raycast"] #panel-now .tpanel-h,body[data-lv="raycast"] #evn{color:#ff6363!important}
+body[data-lv="raycast"] .strip+.strip{border-top:1px solid rgba(255,255,255,.1)}
+body[data-lv="raycast"] #hsplit{background:rgba(255,255,255,.06)}
+body[data-lv="raycast"] .vsplit:hover,body[data-lv="raycast"] .vsplit.active,body[data-lv="raycast"] #hsplit:hover,body[data-lv="raycast"] #hsplit.active,body[data-lv="raycast"] .striph:hover,body[data-lv="raycast"] .striph.active,body[data-lv="raycast"] .drag-handle:hover,body[data-lv="raycast"] .drag-handle.active{background:rgba(255,99,99,.5)}
+body[data-lv="raycast"] #zoomctl{background:rgba(0,0,0,.8);border-color:rgba(255,255,255,.14);border-radius:10px}
+body[data-lv="raycast"] .tpanel{background:#0d0e11!important}
+body[data-lv="raycast"] #dat{color:#8e8f92}
+body[data-lv="raycast"] .tmeta,body[data-lv="raycast"] .atime{color:#b4b5b7}
+body[data-lv="raycast"] .anotes,body[data-lv="raycast"] .tempty{color:#8e8f92}
+body[data-lv="raycast"] .tpanel-h{display:flex;align-items:center;gap:10px;letter-spacing:.18em}
+body[data-lv="raycast"] .tpanel-h::before{content:"";flex:0 0 auto;width:min(9cqw,3.4vh);height:min(9cqw,3.4vh);border-radius:24%;background:linear-gradient(145deg,var(--t1),var(--t2));box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 1px 2px rgba(0,0,0,.4);-webkit-mask:none}
+body[data-lv="raycast"] .tpanel-h::after{content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);width:min(9cqw,3.4vh);height:min(9cqw,3.4vh);background:#fff;-webkit-mask:var(--m) center/58% no-repeat;mask:var(--m) center/58% no-repeat}
+body[data-lv="raycast"] .tpanel-h{position:relative}
+body[data-lv="raycast"] #panel-now .tpanel-h{--t1:#ff7a7a;--t2:#e5484d;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='7' y='2' width='6' height='10' rx='3'/%3E%3Cpath d='M4 8.5v1a6 6 0 0 0 12 0v-1'/%3E%3Cpath d='M10 15.5v3M7 18.5h6'/%3E%3C/svg%3E")}
+body[data-lv="raycast"] #panel-next .tpanel-h{--t1:#60a5fa;--t2:#2563eb;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 10h11M11 6l4 4-4 4'/%3E%3C/svg%3E");color:#b4b5b7!important}
+body[data-lv="raycast"] #panel-call .tpanel-h{--t1:#fbbf24;--t2:#d97706;--m:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.5 13.5V9a4.5 4.5 0 0 1 9 0v4.5l1.5 2h-12z'/%3E%3Cpath d='M8.5 17.5a1.6 1.6 0 0 0 3 0'/%3E%3C/svg%3E");color:#ffc533!important}
+body[data-lv="raycast"] .trem{display:inline-block;padding:1px 8px;border-radius:6px;background:color-mix(in srgb,currentColor 14%,transparent);border:1px solid color-mix(in srgb,currentColor 32%,transparent)}
+body[data-lv="raycast"] .tbar{background:rgba(255,255,255,.08);height:3px}
+body[data-lv="raycast"] #zoomctl button,body[data-lv="raycast"] #close{background:linear-gradient(180deg,#1b1c20,#121316);border:1px solid rgba(255,255,255,.14);border-bottom-width:2px;border-radius:7px;color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 1px 2px rgba(0,0,0,.4)}
+body[data-lv="raycast"] #zoomctl button:hover:not(:disabled),body[data-lv="raycast"] #close:hover{background:linear-gradient(180deg,#24252a,#1b1c20)}
+body[data-lv="raycast"] #zlbl{color:#b4b5b7}
+body[data-lv="raycast"] #syncbtn.off{border-color:#ffc533;color:#ffc533;background:rgba(255,197,51,.14)}
+body[data-lv="raycast"] .callok{border-radius:7px;border-color:rgba(255,197,51,.5);color:#ffc533;background:rgba(255,197,51,.12)}
+body[data-lv="neutro"]{background:#121213;color:#e6e7e9}
+body[data-lv="neutro"] #top{background:#121213;border-bottom:1px solid rgba(255,255,255,.08)}
+body[data-lv="neutro"] .tpanel{background:#1a1a1c;border:1px solid rgba(255,255,255,.08);border-radius:8px}
+body[data-lv="neutro"] #panel-now .tpanel-h,body[data-lv="neutro"] #evn{color:#8ab4f8!important}
+body[data-lv="neutro"] #panel-next .tpanel-h{color:#9ea2aa!important}
+body[data-lv="neutro"] #dat,body[data-lv="neutro"] .anotes,body[data-lv="neutro"] .tempty{color:#8a8f98}
+body[data-lv="neutro"] .tmeta,body[data-lv="neutro"] .atime{color:#9ea2aa}
+body[data-lv="neutro"] .strip+.strip{border-top:1px solid rgba(255,255,255,.07)}
+body[data-lv="neutro"] #hsplit{background:rgba(255,255,255,.05)}
+body[data-lv="neutro"] .vsplit:hover,body[data-lv="neutro"] .vsplit.active,body[data-lv="neutro"] #hsplit:hover,body[data-lv="neutro"] #hsplit.active,body[data-lv="neutro"] .striph:hover,body[data-lv="neutro"] .striph.active,body[data-lv="neutro"] .drag-handle:hover,body[data-lv="neutro"] .drag-handle.active{background:rgba(138,180,248,.5)}
+body[data-lv="neutro"] #zoomctl{background:rgba(26,26,28,.9);border-color:rgba(255,255,255,.1);border-radius:8px}
+body[data-lv="neutro"] #zoomctl button,body[data-lv="neutro"] #close{background:#232326;border-color:rgba(255,255,255,.12);color:#e6e7e9}
+body[data-lv="escenario"]{background:#000;color:#fff;font-weight:700}
+body[data-lv="escenario"] #top{background:#000;border-bottom:2px solid #FFD600}
+body[data-lv="escenario"] .tpanel{background:#000;border:1px solid rgba(255,214,0,.45);border-radius:8px}
+body[data-lv="escenario"] #clk{color:#FFD600}
+body[data-lv="escenario"] #dat{color:#fff;font-weight:800}
+body[data-lv="escenario"] #evn{color:#FFC107!important}
+body[data-lv="escenario"] .tpanel-h,body[data-lv="escenario"] .lbl{color:#FFD600!important}
+body[data-lv="escenario"] .tempty{color:rgba(255,255,255,.45)}
+body[data-lv="escenario"] .tmeta,body[data-lv="escenario"] .atime{color:#fff;font-weight:800}
+body[data-lv="escenario"] .anotes{color:rgba(255,255,255,.8);font-weight:700}
+body[data-lv="escenario"] .trem{color:#FFD600!important;font-weight:900}
+body[data-lv="escenario"] .tbar{background:rgba(255,214,0,.2)}
+body[data-lv="escenario"] .tbar>div{background:#FFD600!important}
+body[data-lv="escenario"] .acall,body[data-lv="escenario"] #offlbl{color:#FFC107}
+body[data-lv="escenario"] .strip+.strip{border-top:1px solid rgba(255,214,0,.3)}
+body[data-lv="escenario"] #hsplit{background:rgba(255,214,0,.15)}
+body[data-lv="escenario"] .vsplit:hover,body[data-lv="escenario"] .vsplit.active,body[data-lv="escenario"] #hsplit:hover,body[data-lv="escenario"] #hsplit.active,body[data-lv="escenario"] .striph:hover,body[data-lv="escenario"] .striph.active,body[data-lv="escenario"] .drag-handle:hover,body[data-lv="escenario"] .drag-handle.active{background:rgba(255,214,0,.6)}
+body[data-lv="escenario"] #zoomctl{background:#000;border-color:#FFD600}
+body[data-lv="escenario"] #zoomctl button{border-color:rgba(255,214,0,.6);color:#FFD600;background:#000}
+body[data-lv="escenario"] #zlbl{color:#fff}
+body[data-lv="escenario"] #close{color:#FFD600;border-color:rgba(255,214,0,.5);background:#000}
+body[data-lv="escenario"] #panel-call.hot{border-color:#FFD600;box-shadow:0 0 0 1px rgba(255,214,0,.4) inset}
+body[data-lv="escenario"] .callok{border-color:#FFD600;color:#FFD600;background:rgba(255,214,0,.12)}
+body[data-lv="escenario"] .callok:hover{background:#FFD600;color:#000}
 </style></head><body>
 <button id="close" onclick="window.close()">✕</button>
 
@@ -5364,7 +5462,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%}
 <scr${""}ipt>
 // Datos que necesita la ventana. Lo único que se interpola: el resto del
 // código va aparte, en liveWindowScript(), como JavaScript real.
-window.__LIVE__ = ${JSON.stringify({blocks:blocksData, callMins:S.event.callMins||15, accent})};
+window.__LIVE__ = ${JSON.stringify({blocks:blocksData, callMins:S.event.callMins||15, accent, lvStyle:liveStyle})};
 (${liveWindowScript.toString()})();
 <\/scr${""}ipt>
 </body></html>`;
