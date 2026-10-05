@@ -1699,7 +1699,7 @@ self.addEventListener('fetch',e=>e.respondWith(
       </button>
       <div class="file-dropdown" id="file-dropdown">
         <button class="file-dropdown-item" onclick="cmdNew()">
-          <span class="fi"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="3"/><path d="M10 7v6M7 10h6"/></svg></span><span>Nuevo CH List</span><span style="margin-left:auto;font-size:10px;color:var(--text3)">⌘N</span>
+          <span class="fi"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="3"/><path d="M10 7v6M7 10h6"/></svg></span><span>Nuevo CH List</span><span style="margin-left:auto;font-size:10px;color:var(--text3)">⌥⌘N</span>
         </button>
         <hr class="file-dropdown-sep">
         <button class="file-dropdown-item" onclick="cmdOpen()">
@@ -8118,8 +8118,8 @@ const TOUR_STEPS = [
     <div style="font-size:12px;color:var(--text2);margin-top:8px;display:grid;grid-template-columns:auto 1fr;gap:4px 12px">
       <b>⌘S</b><span>Guardar</span>
       <b>⌘Z</b><span>Deshacer</span>
-      <b>⌘F</b><span>Buscar canal</span>
-      <b>⌘N</b><span>Nuevo proyecto</span>
+      <b>⌘K</b><span>Buscar y saltar (también /)</span>
+      <b>⌥⌘N</b><span>Nuevo proyecto</span>
     </div>
     <p style="font-size:11px;color:var(--text3);margin-top:14px">Desarrollado por Luis Anton · lag.sound@gmail.com</p>`
   },
@@ -8321,13 +8321,23 @@ document.addEventListener('keydown',function(e){
     document.getElementById('search-modal')?.classList.remove('open');
   }
 });
-// ⌘K / Ctrl+K: se escucha en fase de captura sobre window, antes que cualquier otro
-// manejador, y por la tecla física (e.code) para que funcione con cualquier distribución
-// de teclado. preventDefault evita que el navegador use su propio atajo.
+// Atajos con ⌘/Ctrl (K, O, S, ⇧S, N): se escuchan en fase de captura sobre window, antes
+// que cualquier otro manejador, y por la tecla física (e.code) para que funcionen con
+// cualquier distribución de teclado. preventDefault evita que el navegador use su atajo.
 window.addEventListener('keydown',function(e){
-  if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&!e.altKey&&(e.code==='KeyK'||e.key==='k'||e.key==='K')){
-    e.preventDefault();e.stopPropagation();openSearch();
+  if(!(e.metaKey||e.ctrlKey))return;
+  const k=e.code||('Key'+String(e.key||'').toUpperCase());
+  let run=null;
+  if(e.altKey){
+    // ⌥⌘N Nuevo CH List. No es ⌘N porque Chrome, Safari y Firefox se reservan ⌘N
+    // («nueva ventana») y lo ejecutan antes de que la página pueda impedirlo.
+    if(k==='KeyN'&&!e.shiftKey)run=cmdNew;
   }
+  else if(k==='KeyK'&&!e.shiftKey)run=openSearch;         // ⌘K paleta de comandos
+  else if(k==='KeyO'&&!e.shiftKey)run=cmdOpen;            // ⌘O Abrir local
+  else if(k==='KeyS')run=e.shiftKey?cmdSaveAs:cmdSave;    // ⌘S Guardar local · ⇧⌘S Guardar como
+  if(!run)return;
+  e.preventDefault();e.stopPropagation();run();
 },true);
 const _norm=v=>String(v??'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
 function _cmdItems(){
@@ -10387,14 +10397,7 @@ document.addEventListener('keydown',function(e){
   // Undo/redo: skip if in input (let browser handle native undo in text fields)
   if(e.key==='z'&&!e.shiftKey&&!inInput){e.preventDefault();undo();return;}
   if((e.key==='z'&&e.shiftKey||e.key==='y')&&!inInput){e.preventDefault();redo();return;}
-  // File operations: always intercept (N/O/S don't conflict with text editing)
-  if(e.key==='n'||e.key==='N'){e.preventDefault();cmdNew();}
-  else if(e.key==='o'||e.key==='O'){e.preventDefault();cmdOpen();}
-  else if(e.key==='s'||e.key==='S'){
-    e.preventDefault();
-    if(e.shiftKey)cmdSaveAs();
-    else cmdSave();
-  }
+  // ⌥⌘N / ⌘O / ⌘S / ⇧⌘S: ver el manejador en captura junto al de ⌘K
 });
 
 // Mark file as modified when state changes
