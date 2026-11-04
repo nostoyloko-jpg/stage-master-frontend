@@ -173,6 +173,9 @@ body.light .badge-amber{background:rgba(192,120,0,0.1);}
 .micro-sel.micro-falta{color:var(--accent,#e94560);font-weight:600;}
 .print-val{display:none;font-size:11px;color:inherit;padding:1px 2px;}.obs-inp{min-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;text-transform:uppercase;}
 .obs-inp::placeholder{text-transform:none;}
+.col-reset{position:absolute;top:3px;right:3px;border:1px solid var(--border2);border-radius:4px;background:var(--bg3);color:var(--text2);cursor:pointer;font-size:8px;font-weight:700;letter-spacing:.6px;line-height:1;padding:2px 4px;font-family:var(--font)}
+.col-reset:hover{border-color:var(--accent);color:var(--accent)}
+@media print{.col-reset{display:none!important}}
 .obs-inp:focus{text-overflow:clip;}
 
 /* SUMMARY */
@@ -3859,10 +3862,10 @@ function buildArtistPage(a){
               ${sbGroupTh}
               <th rowspan="2" class="tleft" style="min-width:100px">${t('instrumento').toUpperCase()}</th>
               <th rowspan="2" class="cs-col" style="width:38px" title="${t('canalStage')}">${t('canalStage').toUpperCase()}</th>
-              <th rowspan="2" style="min-width:95px;position:relative">${t('micro').toUpperCase()}<button type="button" onclick="event.stopPropagation();resetArtistColumn(${a.id},'micro')" title="Vaciar toda la columna de micros de este artista" style="position:absolute;top:2px;right:2px;width:14px;height:14px;border:none;border-radius:3px;background:transparent;color:var(--text3);cursor:pointer;font-size:10px;line-height:14px;padding:0">⟲</button></th>
+              <th rowspan="2" style="min-width:95px;position:relative">${t('micro').toUpperCase()}<button type="button" onclick="event.stopPropagation();resetArtistColumn(${a.id},'micro')" title="Vaciar toda la columna de micros de este artista" class="col-reset">RESET</button></th>
               <th rowspan="2" class="di-col" style="width:54px">${t('di').toUpperCase()}</th>
               <th rowspan="2" class="phantom-col" style="width:28px" title="${t('phantom48v')}">${t('phantom48v')}</th>
-              <th ${isPieCheckboxMode?'':'rowspan="2"'} class="pie-col" style="${isPieCheckboxMode?'':'width:78px;'}background:rgba(255,179,71,0.08);cursor:pointer;position:relative" ${isPieCheckboxMode?`colspan="${PIE_DEFS.length}"`:''} onclick="togglePieMode(${a.id})" title="${isPieCheckboxMode?'Clic para cambiar a lista desplegable':'Clic para cambiar a checkboxes'}">PIE <span style="opacity:.5;font-size:9px">⇄</span><button type="button" onclick="event.stopPropagation();resetArtistColumn(${a.id},'pie')" title="Vaciar toda la columna de pies de este artista" style="position:absolute;top:2px;right:2px;width:14px;height:14px;border:none;border-radius:3px;background:transparent;color:var(--text3);cursor:pointer;font-size:10px;line-height:14px;padding:0">⟲</button></th>
+              <th ${isPieCheckboxMode?'':'rowspan="2"'} class="pie-col" style="${isPieCheckboxMode?'':'width:78px;'}background:rgba(255,179,71,0.08);cursor:pointer;position:relative" ${isPieCheckboxMode?`colspan="${PIE_DEFS.length}"`:''} onclick="togglePieMode(${a.id})" title="${isPieCheckboxMode?'Clic para cambiar a lista desplegable':'Clic para cambiar a checkboxes'}">PIE <span style="opacity:.5;font-size:9px">⇄</span><button type="button" onclick="event.stopPropagation();resetArtistColumn(${a.id},'pie')" title="Vaciar toda la columna de pies de este artista" class="col-reset">RESET</button></th>
               <th rowspan="2" class="tleft" style="min-width:110px">${t('observaciones').toUpperCase()}</th>
             </tr>
             <tr class="thead-extended">${sbSubThs}${isPieCheckboxMode?pieSubThs:''}</tr>
