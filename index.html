@@ -614,6 +614,10 @@ tr.dragging{opacity:.4;}
 .pdf-section-row input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent);cursor:pointer;flex-shrink:0;}
 .pdf-section-label{font-size:12px;color:var(--text);flex:1;}
 .pdf-move{display:flex;gap:4px;margin-left:auto;flex-shrink:0}
+.pdf-onepage{margin-left:auto;flex-shrink:0;height:24px;padding:0 8px;border:1px solid var(--border2);border-radius:6px;background:var(--bg3);color:var(--text3);cursor:pointer;font-size:10px;font-weight:600;white-space:nowrap}
+.pdf-onepage:hover{border-color:var(--accent);color:var(--accent)}
+.pdf-onepage.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.pdf-onepage+.pdf-move{margin-left:6px}
 .pdf-move button{width:26px;height:24px;padding:0;border:1px solid var(--border2);border-radius:6px;background:var(--bg3);color:var(--text2);cursor:pointer;font-size:12px;line-height:1}
 .pdf-move button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
 .pdf-move button:disabled{opacity:.3;cursor:default}
@@ -10929,6 +10933,7 @@ function getPdfSections(){
       id:'artist-'+a.id,
       label:'CH List — '+a.nombre,
       sub:a.canales+' canales',
+      artistId:a.id,
       pageId:'page-artist-'+a.id,
       checked:true
     });
@@ -10941,6 +10946,14 @@ window._pdfMode = 'extended';
 window._pdfColor = true;
 // Separadores de sección en el PDF: 'portada' (hoja separadora) o 'titulo' (banda en la primera hoja). Se recuerda.
 window._pdfCovers = SM_STORE.getSetting('pdfCovers','portada');
+// CH List en una sola hoja, por artista: se guarda en el artista (a.pdfUnaHoja), dentro del festival.
+function togglePdfOnePage(i){
+  const s=_pdfSections[i]; if(!s||!s.artistId) return;
+  const a=S.artists.find(x=>x.id===s.artistId); if(!a) return;
+  a.pdfUnaHoja=!a.pdfUnaHoja;
+  saveS();
+  renderPdfSectionList();
+}
 function setPdfCovers(v){ window._pdfCovers=(v==='titulo'?'titulo':'portada'); SM_STORE.setSetting('pdfCovers',window._pdfCovers); }
 
 function openPdfModal(){
@@ -10974,6 +10987,7 @@ function renderPdfSectionList(){
         <div class="pdf-section-label">${esc(s.label)}</div>
         <div class="pdf-section-sub">${esc(s.sub)}</div>
       </div>
+      ${s.artistId?(()=>{const on=!!S.artists.find(x=>x.id===s.artistId)?.pdfUnaHoja;return `<button type="button" class="pdf-onepage${on?' on':''}" title="Reduce la letra lo justo para que quepa en 1 hoja" aria-pressed="${on}" onclick="event.stopPropagation();togglePdfOnePage(${i})">1 hoja</button>`;})():''}
       <div class="pdf-move">
         <button type="button" title="Subir" aria-label="Subir ${esc(s.label)}" ${i===0?'disabled':''} onclick="event.stopPropagation();movePdfSection(${i},-1)">↑</button>
         <button type="button" title="Bajar" aria-label="Bajar ${esc(s.label)}" ${i===n-1?'disabled':''} onclick="event.stopPropagation();movePdfSection(${i},1)">↓</button>
@@ -11800,6 +11814,7 @@ async function runPdfExport(){
       const pw = isSimpleMode ? 210 : 297;
       const ph = isSimpleMode ? 297 : 210;
 
+      const _pagesBefore=pdf.getNumberOfPages();
       pdf.addPage([pw,ph], orient);
       drawArtistHeader();
 
@@ -11963,46 +11978,59 @@ async function runPdfExport(){
       const hasNotes=!!(a.soundcheckNotas||a.notas);
       const tableStartY=hasNotes ? 27+(pdf._notesBoxH||8)+3 : 30;
 
-      if(isSimpleMode){
-        pdf.autoTable({
-          ...tableStyles,
-          startY:tableStartY,
-          head:[['#','Sub','Instrumento','Micro / DI','48V','Pie','Observaciones']],
-          body,
-          columnStyles:{
-            0:{cellWidth:10, halign:'center', textColor:GRAY3},
-            1:{cellWidth:16, fontStyle:'bold'},
-            2:{cellWidth:58, fontStyle:'bold'},
-            3:{cellWidth:44},
-            4:{cellWidth:12, halign:'center'},
-            5:{cellWidth:18},
-            6:{cellWidth:cw-158},
-          },
-          didParseCell: function(data){ styleSubCell(data, 1, 2, 4); },
-          didDrawPage: function(){ drawArtistHeader(); },
-          margin:{left:M, right:M, bottom:14, top:tableStartY},
-          pageBreak:'auto',
-        });
-      } else {
-        pdf.autoTable({
-          ...tableStyles,
-          startY:tableStartY,
-          head:[['#','Sub','Instrumento','CH Stage','Micro','DI','48V','Pies','Observaciones']],
-          body,
-          columnStyles:{
-            0:{cellWidth:8,  halign:'center', textColor:GRAY3},
-            1:{cellWidth:hasSubs?S.subboxes.length*6+4:6, fontStyle:'bold'},
-            2:{cellWidth:52, fontStyle:'bold'},
-            3:{cellWidth:16, halign:'center'},
-            4:{cellWidth:40},
-            5:{cellWidth:14, halign:'center'},
-            6:{cellWidth:12, halign:'center'},
-            7:{cellWidth:12, halign:'center'},
-          },
-          didParseCell: function(data){ styleSubCell(data, 1, 2, 6); },
-          didDrawPage: function(){ drawArtistHeader(); },
-          margin:{left:M, right:M, bottom:14, top:tableStartY},
-        });
+      // "Cada CH List en 1 hoja": se prueba con letra y celdas cada vez más pequeñas hasta
+      // que la tabla y la barra de totales caben en una hoja (si ni así cabe, se queda la más pequeña).
+      const SIZES=a.pdfUnaHoja?[[8,2],[7.5,1.6],[7,1.3],[6.5,1],[6,0.8],[5.5,0.6],[5,0.5]]:[[8,2]];
+      for(let zi=0; zi<SIZES.length; zi++){
+        const [fs,pad]=SIZES[zi];
+        const ts={...tableStyles, styles:{...tableStyles.styles,fontSize:fs,cellPadding:pad}, headStyles:{...tableStyles.headStyles,fontSize:Math.max(4.5,fs-0.5)}};
+        if(isSimpleMode){
+          pdf.autoTable({
+            ...ts,
+            startY:tableStartY,
+            head:[['#','Sub','Instrumento','Micro / DI','48V','Pie','Observaciones']],
+            body,
+            columnStyles:{
+              0:{cellWidth:10, halign:'center', textColor:GRAY3},
+              1:{cellWidth:16, fontStyle:'bold'},
+              2:{cellWidth:58, fontStyle:'bold'},
+              3:{cellWidth:44},
+              4:{cellWidth:12, halign:'center'},
+              5:{cellWidth:18},
+              6:{cellWidth:cw-158},
+            },
+            didParseCell: function(data){ styleSubCell(data, 1, 2, 4); },
+            didDrawPage: function(){ drawArtistHeader(); },
+            margin:{left:M, right:M, bottom:14, top:tableStartY},
+            pageBreak:'auto',
+          });
+        } else {
+          pdf.autoTable({
+            ...ts,
+            startY:tableStartY,
+            head:[['#','Sub','Instrumento','CH Stage','Micro','DI','48V','Pies','Observaciones']],
+            body,
+            columnStyles:{
+              0:{cellWidth:8,  halign:'center', textColor:GRAY3},
+              1:{cellWidth:hasSubs?S.subboxes.length*6+4:6, fontStyle:'bold'},
+              2:{cellWidth:52, fontStyle:'bold'},
+              3:{cellWidth:16, halign:'center'},
+              4:{cellWidth:40},
+              5:{cellWidth:14, halign:'center'},
+              6:{cellWidth:12, halign:'center'},
+              7:{cellWidth:12, halign:'center'},
+            },
+            didParseCell: function(data){ styleSubCell(data, 1, 2, 6); },
+            didDrawPage: function(){ drawArtistHeader(); },
+            margin:{left:M, right:M, bottom:14, top:tableStartY},
+          });
+        }
+        const fits=pdf.getNumberOfPages()===_pagesBefore+1 && pdf.lastAutoTable.finalY+8<=ph-14;
+        if(fits||zi===SIZES.length-1) break;
+        // No cabe: se quitan las hojas de este intento y se vuelve a empezar más pequeño
+        for(let pgn=pdf.getNumberOfPages(); pgn>_pagesBefore; pgn--) pdf.deletePage(pgn);
+        pdf.addPage([pw,ph], orient);
+        drawArtistHeader();
       }
 
       // Summary bar
