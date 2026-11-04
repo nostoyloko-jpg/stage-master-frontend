@@ -7663,7 +7663,69 @@ let _planScale=1;
 // (sea cual sea el tamaño de la ventana) y en el PDF.
 const PLAN_W=1000, PLAN_H0=707, PLAN_PX=2000, PLAN_Q=0.82;
 function planHeight(plan){ return (plan&&plan.img&&plan.imgW)? PLAN_W*plan.imgH/plan.imgW : PLAN_H0; }
-/** Convierte la página elegida del PDF (o la imagen) en un JPG ligero. */
+/** Caja de lo que no es blanco (casi blanco) en un canvas. Devuelve null si está vacío. */
+function planInkBox(cv){
+  const ctx=cv.getContext('2d'), W=cv.width, H=cv.height;
+  const d=ctx.getImageData(0,0,W,H).data, step=W*H>4e6?2:1;
+  let x0=W,y0=H,x1=-1,y1=-1;
+  for(let y=0;y<H;y+=step){
+    for(let x=0;x<W;x+=step){
+      const i=(y*W+x)*4;
+      if(d[i]<240||d[i+1]<240||d[i+2]<240){ if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; }
+    }
+  }
+  return x1<0?null:{x:x0,y:y0,w:x1-x0+1,h:y1-y0+1};
+}
+/** Recorta el blanco que rodea al dibujo (con un margen pequeño) y reduce a PLAN_PX en el lado largo. */
+function planTrimToJpeg(src){
+  const box=planInkBox(src)||{x:0,y:0,w:src.width,h:src.height};
+  const pad=Math.round(Math.max(box.w,box.h)*0.02);
+  const x=Math.max(0,box.x-pad), y=Math.max(0,box.y-pad);
+  const w=Math.min(src.width-x, box.w+pad*2), h=Math.min(src.height-y, box.h+pad*2);
+  const k=Math.min(1,PLAN_PX/Math.max(w,h));
+  const out=document.createElement('canvas');
+  out.width=Math.max(1,Math.round(w*k)); out.height=Math.max(1,Math.round(h*k));
+  const ctx=out.getContext('2d'); ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,out.width,out.height);
+  ctx.drawImage(src,x,y,w,h,0,0,out.width,out.height);
+  return {data:out.toDataURL('image/jpeg',PLAN_Q), w:out.width, h:out.height};
+}
+/**
+ * Para el PDF: zona útil del plano (dibujo + marcas), en unidades del plano, y la imagen
+ * recortada a esa zona. Así el plano ocupa la hoja aunque el original traiga mucho blanco.
+ */
+async function planCropForPdf(plan){
+  const ph=planHeight(plan);
+  let bx0=PLAN_W,by0=ph,bx1=0,by1=0;
+  const add=(x0,y0,x1,y1)=>{bx0=Math.min(bx0,x0);by0=Math.min(by0,y0);bx1=Math.max(bx1,x1);by1=Math.max(by1,y1);};
+  let img=null;
+  if(plan.img){
+    img=await new Promise((res,rej)=>{const im=new Image();im.onload=()=>res(im);im.onerror=rej;im.src=plan.img;});
+    const cv=document.createElement('canvas'); cv.width=img.naturalWidth; cv.height=img.naturalHeight;
+    const c=cv.getContext('2d'); c.fillStyle='#fff'; c.fillRect(0,0,cv.width,cv.height); c.drawImage(img,0,0);
+    const b=planInkBox(cv), u=PLAN_W/cv.width;
+    if(b) add(b.x*u,b.y*u,(b.x+b.w)*u,(b.y+b.h)*u);
+  }
+  (plan.elements||[]).forEach(el=>{
+    const hw=el.type==='nota'?Math.min(160,(String(el.label||'').length*6.5)+14)/2:(el.w||36)/2;
+    const hh=el.type==='nota'?16:(el.w||36)/2;
+    add(el.x-hw,el.y-hh,el.x+hw,el.y+hh);
+  });
+  if(bx1<=bx0||by1<=by0) return {sx:0,sy:0,sw:PLAN_W,sh:ph,img:plan.img||null};
+  const pad=Math.max(bx1-bx0,by1-by0)*0.02;
+  const sx=Math.max(0,bx0-pad), sy=Math.max(0,by0-pad);
+  const sw=Math.min(PLAN_W,bx1+pad)-sx, sh=Math.min(ph,by1+pad)-sy;
+  let crop=null;
+  if(img){
+    const u=img.naturalWidth/PLAN_W;
+    const cv=document.createElement('canvas'); cv.width=Math.max(1,Math.round(sw*u)); cv.height=Math.max(1,Math.round(sh*u));
+    const c=cv.getContext('2d'); c.fillStyle='#fff'; c.fillRect(0,0,cv.width,cv.height);
+    c.drawImage(img,sx*u,sy*u,sw*u,sh*u,0,0,cv.width,cv.height);
+    crop=cv.toDataURL('image/jpeg',0.9);
+  }
+  return {sx,sy,sw,sh,img:crop};
+}
+
+/** Convierte la página elegida del PDF (o la imagen) en un JPG ligero, sin el blanco de alrededor. */
 async function planToJpeg(file,b64,pageNum){
   const cv=document.createElement('canvas');
   if((file.type||'').includes('pdf')){
@@ -7675,19 +7737,20 @@ async function planToJpeg(file,b64,pageNum){
     const doc=await pdfjsLib.getDocument({data:bytes}).promise;
     const page=await doc.getPage(Math.max(1,Math.min(doc.numPages,pageNum||1)));
     const vp1=page.getViewport({scale:1});
-    const vp=page.getViewport({scale:PLAN_PX/Math.max(vp1.width,vp1.height)});
+    // Se renderiza al doble para que, tras recortar el blanco, el dibujo conserve resolución
+    const vp=page.getViewport({scale:PLAN_PX*2/Math.max(vp1.width,vp1.height)});
     cv.width=Math.round(vp.width); cv.height=Math.round(vp.height);
     const ctx=cv.getContext('2d'); ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,cv.width,cv.height);
     await page.render({canvasContext:ctx, viewport:vp}).promise;
     try{ doc.destroy(); }catch(e){}
   } else {
     const img=await new Promise((res,rej)=>{const im=new Image();im.onload=()=>res(im);im.onerror=()=>rej(new Error('No se pudo leer la imagen'));im.src=b64;});
-    const k=Math.min(1,PLAN_PX/Math.max(img.naturalWidth,img.naturalHeight));
+    const k=Math.min(1,PLAN_PX*2/Math.max(img.naturalWidth,img.naturalHeight));
     cv.width=Math.round(img.naturalWidth*k); cv.height=Math.round(img.naturalHeight*k);
     const ctx=cv.getContext('2d'); ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,cv.width,cv.height);
     ctx.drawImage(img,0,0,cv.width,cv.height);
   }
-  return {data:cv.toDataURL('image/jpeg',PLAN_Q), w:cv.width, h:cv.height};
+  return planTrimToJpeg(cv);
 }
 /** Encaja el plano completo en la ventana. */
 function planFit(aid){
@@ -10762,27 +10825,30 @@ function buildSubboxSvgForPdf(sb, slots, lockedSlots){
 
 /** Dibuja una marca del plano en el PDF (vectorial). k = mm por unidad del plano.
  *  el.x/el.y son el CENTRO de la marca (en pantalla van con translate(-50%,-50%)). */
-function drawPlanElementPdf(pdf,el,ox,oy,k){
+function drawPlanElementPdf(pdf,el,ox,oy,k,ks){
+  // k: posición (mm por unidad del plano). ks: tamaño de la marca (puede ser menor que k
+  // cuando el plano se amplía para llenar la hoja, para que las marcas no tapen el dibujo).
+  ks=ks||k;
   const op=el.opacity??1;
   const useGS=op<1&&pdf.GState&&pdf.setGState;
   if(useGS){ pdf.saveGraphicsState(); pdf.setGState(new pdf.GState({opacity:op})); }
   const PT=0.3528; // mm por punto
   if(el.type==='nota'){
-    const fsMm=11*k, padX=7*k, padY=4*k;
+    const fsMm=11*ks, padX=7*ks, padY=4*ks;
     pdf.setFont('helvetica','bold'); pdf.setFontSize(fsMm/PT);
-    const lines=pdf.splitTextToSize(cleanForPDF(el.label||''), 146*k);
-    const tw=Math.max(...lines.map(l=>pdf.getTextWidth(l)), 26*k);
+    const lines=pdf.splitTextToSize(cleanForPDF(el.label||''), 146*ks);
+    const tw=Math.max(...lines.map(l=>pdf.getTextWidth(l)), 26*ks);
     const bw=tw+padX*2, bh=lines.length*fsMm*1.25+padY*2;
     const x=ox+el.x*k-bw/2, y=oy+el.y*k-bh/2;
     const [r,g,b]=hexToRgb(el.color||'#4fc3f7');
     pdf.setFillColor(Math.round(255-(255-r)*0.18),Math.round(255-(255-g)*0.18),Math.round(255-(255-b)*0.18));
-    pdf.setDrawColor(r,g,b); pdf.setLineWidth(1.5*k);
-    pdf.roundedRect(x,y,bw,bh,5*k,5*k,'FD');
+    pdf.setDrawColor(r,g,b); pdf.setLineWidth(1.5*ks);
+    pdf.roundedRect(x,y,bw,bh,5*ks,5*ks,'FD');
     const ink=sbInk(el.color||'#4fc3f7'); const [ir,ig,ib]=hexToRgb(ink==='#ffffff'?el.color:ink);
     pdf.setTextColor(ir,ig,ib);
     lines.forEach((l,i)=>pdf.text(l, x+padX, y+padY+fsMm*(i+0.9)*1.25-fsMm*0.25));
   } else {
-    const d=(el.w||36)*k, r=d/2;
+    const d=(el.w||36)*ks, r=d/2;
     const cx=ox+el.x*k, cy=oy+el.y*k;
     if(el.type==='corriente'){
       pdf.setFillColor(34,34,34); pdf.circle(cx,cy,r,'F');
@@ -10792,7 +10858,7 @@ function drawPlanElementPdf(pdf,el,ox,oy,k){
     } else {
       const [cr,cg,cb]=hexToRgb(el.color||'#888888');
       pdf.setFillColor(cr,cg,cb); pdf.circle(cx,cy,r,'F');
-      const fsMm=Math.max(10,Math.round((el.w||36)*0.55))*k;
+      const fsMm=Math.max(10,Math.round((el.w||36)*0.55))*ks;
       pdf.setFont('helvetica','bold'); pdf.setFontSize(fsMm/PT);
       const [tr,tg,tb]=hexToRgb(sbInk(el.color||'#888888'));
       pdf.setTextColor(tr,tg,tb);
@@ -11624,16 +11690,22 @@ async function runPdfExport(){
         pdf.text(cleanForPDF(a.nombre), M, 15);
         pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY3);
         pdf.text(safe(S.event.nombre||'',50), PW-M, 15, {align:'right'});
-        const ph=planHeight(plan);
+        // Solo la zona útil (dibujo + marcas), ampliada a todo el hueco de la hoja
+        const crop=await planCropForPdf(plan);
         const areaW=PW-M*2, areaH=PH-SB_TOP-SB_BOTTOM-2;
-        const k=Math.min(areaW/PLAN_W, areaH/ph);
-        const ox=M+(areaW-PLAN_W*k)/2, oy=SB_TOP+(areaH-ph*k)/2;
-        if(plan.img){
-          try{ pdf.addImage(plan.img,'JPEG',ox,oy,PLAN_W*k,ph*k); }catch(e){ console.warn('[PLAN] imagen no válida',e); }
+        const k=Math.min(areaW/crop.sw, areaH/crop.sh);
+        const bx=M+(areaW-crop.sw*k)/2, by=SB_TOP+(areaH-crop.sh*k)/2;
+        if(crop.img){
+          try{ pdf.addImage(crop.img,'JPEG',bx,by,crop.sw*k,crop.sh*k); }catch(e){ console.warn('[PLAN] imagen no válida',e); }
         } else {
-          pdf.setDrawColor(200,200,200); pdf.setLineWidth(0.3); pdf.rect(ox,oy,PLAN_W*k,ph*k);
+          pdf.setDrawColor(200,200,200); pdf.setLineWidth(0.3); pdf.rect(bx,by,crop.sw*k,crop.sh*k);
         }
-        (plan.elements||[]).forEach(el=>{ try{ drawPlanElementPdf(pdf,el,ox,oy,k); }catch(e){ console.warn('[PLAN] marca',el,e); } });
+        // Origen del plano en la hoja: las marcas se colocan con las mismas coordenadas
+        const ox=bx-crop.sx*k, oy=by-crop.sy*k;
+        // Las marcas crecen como mucho un 50 % respecto al plano entero, para no tapar el dibujo
+        const kFull=Math.min(areaW/PLAN_W, areaH/planHeight(plan));
+        const ks=Math.min(k, kFull*1.5);
+        (plan.elements||[]).forEach(el=>{ try{ drawPlanElementPdf(pdf,el,ox,oy,k,ks); }catch(e){ console.warn('[PLAN] marca',el,e); } });
         addFooter(pdf,'Plano de escenario  |  '+cleanForPDF(a.nombre));
       }
     }
