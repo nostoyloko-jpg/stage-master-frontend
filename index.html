@@ -171,7 +171,9 @@ body.light .badge-amber{background:rgba(192,120,0,0.1);}
 .instr-inp{min-width:160px;}
 .micro-inp{min-width:95px;}
 .micro-sel.micro-falta{color:var(--accent,#e94560);font-weight:600;}
-.print-val{display:none;font-size:11px;color:inherit;padding:1px 2px;}.obs-inp{min-width:180px;resize:none;overflow:hidden;line-height:1.4;min-height:22px;height:22px;vertical-align:middle;text-transform:uppercase;}
+.print-val{display:none;font-size:11px;color:inherit;padding:1px 2px;}.obs-inp{min-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;text-transform:uppercase;}
+.obs-inp::placeholder{text-transform:none;}
+.obs-inp:focus{text-overflow:clip;}
 
 /* SUMMARY */
 .summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;}
@@ -710,6 +712,8 @@ tr.dragging{opacity:.4;}
 body.light .tl-tooltip{background:#1a1d26;border-color:rgba(255,255,255,0.15);}
 .tl-tooltip-name{font-weight:800;color:#fff;margin-bottom:5px;font-size:14px;letter-spacing:.2px;}
 .tl-tooltip-time{color:rgba(255,255,255,.7);font-family:monospace;font-size:12px;font-weight:500;}
+.tl-tooltip-obs{color:#fff;font-size:12.5px;font-weight:500;white-space:pre-wrap;word-break:break-word;text-transform:uppercase;max-width:340px;}
+.tl-tooltip:has(.tl-tooltip-obs){max-width:360px;}
 .tl-tooltip-notes{color:rgba(255,255,255,.55);font-size:11px;margin-top:6px;border-top:1px solid rgba(255,255,255,.12);padding-top:6px;line-height:1.5;}
 
 
@@ -3128,7 +3132,7 @@ function closeSidebar(){
 }
 
 // ── RENDER ALL ──
-function renderAll(){renderConfig();renderArtistNav();rebuildArtistPages();updSBInfo();setTimeout(()=>{document.querySelectorAll('.obs-inp').forEach(autoGrow);renderMicroList();updMicLockUI();},80);}
+function renderAll(){renderConfig();renderArtistNav();rebuildArtistPages();updSBInfo();setTimeout(()=>{renderMicroList();updMicLockUI();},80);}
 
 // ── CONFIG ──
 function renderConfig(){
@@ -3774,7 +3778,7 @@ function buildArtistPage(a){
       </td>
       <td class="phantom-col" style="width:28px;text-align:center"${rs}><div class="pie-item"><input type="checkbox" class="pie-cb phantom-cb" data-aid="${a.id}" data-chidx="${i}" ${ch.phantom?'checked':''} title="48V phantom" onchange="updCh(${a.id},${i},'phantom',this.checked)" style="accent-color:var(--accent)"><span class="pie-lbl">48V</span></div><span class="print-val">${ch.phantom?'48V':''}</span></td>
       ${pieCellHtml}
-      <td class="tleft"${rs}><textarea class="obs-inp" placeholder="${t('observaciones')}..." oninput="updCh(${a.id},${i},'obs',this.value);autoGrow(this)" data-row="${i}" data-col="obs">${esc(ch.obs||'')}</textarea><span class="print-val">${esc(ch.obs||'')}</span></td>`;
+      <td class="tleft"${rs}><input type="text" class="obs-inp" placeholder="${t('observaciones')}…" value="${esc(ch.obs||'')}" oninput="updCh(${a.id},${i},'obs',this.value)" onmouseenter="showObsTip(event,this)" onmousemove="moveTLTooltip(event)" onmouseleave="hideTLTooltip()" onfocus="hideTLTooltip()" data-row="${i}" data-col="obs"><span class="print-val">${esc(ch.obs||'')}</span></td>`;
     }
 
     // "Ya montado" no se marca a mano: lo es el canal que va a un conector anclado ⚓
@@ -4229,6 +4233,14 @@ function showSBTooltip(ev, slot, entriesOrKey){
   tt.addEventListener('mouseleave',hideTLTooltip,{once:true});
 }
 
+// Observaciones: si el texto no cabe en la celda, bocadillo con el texto completo al pasar el ratón
+function showObsTip(ev,el){
+  if(document.activeElement===el||!el.value||el.scrollWidth<=el.clientWidth+1) return;
+  const tt=document.getElementById('tl-tooltip');if(!tt)return;
+  tt.innerHTML=`<div class="tl-tooltip-obs">${esc(el.value)}</div>`;
+  tt.style.display='block';
+  moveTLTooltip(ev);
+}
 function moveTLTooltip(ev){
   const tt=document.getElementById('tl-tooltip');if(!tt)return;
   const x=ev.clientX+14, y=ev.clientY-10;
@@ -8821,8 +8833,6 @@ function undo(){
   if(prevPage==='artist'&&prevAid)nav('artist',prevAid);
   else nav(prevPage||'config');
   updUndoButtons();
-  // Restore textarea natural heights
-  setTimeout(()=>document.querySelectorAll('.obs-inp').forEach(el=>{el.style.height='22px';}),100);
 }
 function redo(){
   if(_histIdx>=_history.length-1)return;
@@ -8833,7 +8843,6 @@ function redo(){
   if(prevPage==='artist'&&prevAid)nav('artist',prevAid);
   else nav(prevPage||'config');
   updUndoButtons();
-  setTimeout(()=>document.querySelectorAll('.obs-inp').forEach(el=>{el.style.height='22px';}),100);
 }
 function updUndoButtons(){
   const u=document.getElementById('undo-btn');
