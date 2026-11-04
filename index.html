@@ -613,6 +613,10 @@ tr.dragging{opacity:.4;}
 .pdf-section-row:last-child{border-bottom:none;}
 .pdf-section-row input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent);cursor:pointer;flex-shrink:0;}
 .pdf-section-label{font-size:12px;color:var(--text);flex:1;}
+.pdf-move{display:flex;gap:4px;margin-left:auto;flex-shrink:0}
+.pdf-move button{width:26px;height:24px;padding:0;border:1px solid var(--border2);border-radius:6px;background:var(--bg3);color:var(--text2);cursor:pointer;font-size:12px;line-height:1}
+.pdf-move button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.pdf-move button:disabled{opacity:.3;cursor:default}
 .pdf-section-sub{font-size:10px;color:var(--text3);}
 .pdf-modal-foot{padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-shrink:0;background:var(--bg2);}
 .pdf-progress{display:none;font-size:11px;color:var(--text2);flex:1;}
@@ -2290,6 +2294,24 @@ self.addEventListener('fetch',e=>e.respondWith(
             </div>
           </label>
         </div>
+        <!-- Separadores de sección -->
+        <div style="display:flex;gap:6px;margin-bottom:14px;padding:10px;background:var(--bg3);border-radius:var(--radius);border:1px solid var(--border)">
+          <div style="font-size:10px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;align-self:center;margin-right:4px">Secciones:</div>
+          <label style="display:flex;align-items:center;gap:5px;cursor:pointer;flex:1">
+            <input type="radio" name="pdf-covers" value="titulo" id="pdf-covers-titulo" style="accent-color:var(--accent)" onchange="setPdfCovers('titulo')">
+            <div>
+              <div style="font-size:11px;font-weight:600;color:var(--text)">Título</div>
+              <div style="font-size:9px;color:var(--text3)">En la primera hoja · Sin páginas extra</div>
+            </div>
+          </label>
+          <label style="display:flex;align-items:center;gap:5px;cursor:pointer;flex:1">
+            <input type="radio" name="pdf-covers" value="portada" id="pdf-covers-portada" style="accent-color:var(--accent)" onchange="setPdfCovers('portada')">
+            <div>
+              <div style="font-size:11px;font-weight:600;color:var(--text)">Portada</div>
+              <div style="font-size:9px;color:var(--text3)">Una hoja separadora por sección</div>
+            </div>
+          </label>
+        </div>
         <!-- Color print toggle -->
         <div style="margin-bottom:12px;padding:8px 10px;background:var(--bg3);border-radius:var(--radius);border:1px solid var(--border);display:flex;align-items:center;gap:8px">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;flex:1">
@@ -2302,7 +2324,10 @@ self.addEventListener('fetch',e=>e.respondWith(
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
           <span style="font-size:11px;color:var(--text3)">Selecciona qué apartados incluir:</span>
-          <button class="btn btn-sm" id="pdf-toggle-all-btn" onclick="toggleAllPdfSections()" style="font-size:10px;padding:3px 10px">Deseleccionar todo</button>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm" onclick="resetPdfOrder()" title="Volver al orden de siempre" style="font-size:10px;padding:3px 10px">Orden por defecto</button>
+            <button class="btn btn-sm" id="pdf-toggle-all-btn" onclick="toggleAllPdfSections()" style="font-size:10px;padding:3px 10px">Deseleccionar todo</button>
+          </div>
         </div>
         <div id="pdf-sections-list"></div>
       </div>
@@ -2492,7 +2517,7 @@ const LANGS={
     notasLabel:'Notas',notasPh:'Notas para este artista...',
     // PDF modal
     exportarPDF:'Exportar PDF',
-    seleccionaApartados:'Selecciona qué apartados incluir en el PDF:',
+    seleccionaApartados:'Elige qué apartados incluir y en qué orden:',
     selAll:'Seleccionar todo',deselAll:'Deseleccionar todo',
     cancelar:'Cancelar',generando:'Generando...',
     // File modal
@@ -2570,7 +2595,7 @@ const LANGS={
     resumenSubbox:'Subbox Summary — all artists',
     notasLabel:'Notes',notasPh:'Notes for this artist...',
     exportarPDF:'Export PDF',
-    seleccionaApartados:'Select which sections to include in the PDF:',
+    seleccionaApartados:'Choose which sections to include and their order:',
     selAll:'Select all',deselAll:'Deselect all',
     cancelar:'Cancel',generando:'Generating...',
     nuevoCHList:'New CH List',
@@ -10914,14 +10939,34 @@ function getPdfSections(){
 let _pdfSections=[];
 window._pdfMode = 'extended';
 window._pdfColor = true;
+// Separadores de sección en el PDF: 'portada' (hoja separadora) o 'titulo' (banda en la primera hoja). Se recuerda.
+window._pdfCovers = SM_STORE.getSetting('pdfCovers','portada');
+function setPdfCovers(v){ window._pdfCovers=(v==='titulo'?'titulo':'portada'); SM_STORE.setSetting('pdfCovers',window._pdfCovers); }
 
 function openPdfModal(){
-  _pdfSections=getPdfSections();
+  _pdfSections=applyPdfOrder(getPdfSections());
   const radio = document.getElementById('pdf-mode-'+window._pdfMode);
   if(radio) radio.checked = true;
   const colorCb = document.getElementById('pdf-color-mode');
   if(colorCb) colorCb.checked = window._pdfColor;
+  const covRadio=document.getElementById('pdf-covers-'+(window._pdfCovers==='titulo'?'titulo':'portada'));
+  if(covRadio) covRadio.checked=true;
+  renderPdfSectionList();
+  document.getElementById('pdf-modal').classList.add('open');
+}
+
+// ── Orden de las secciones del PDF (se recuerda) ──
+/** Aplica el orden guardado; lo que no esté guardado va detrás, en su orden de siempre. */
+function applyPdfOrder(sections){
+  const order=SM_STORE.getSetting('pdfOrder',[]);
+  if(!Array.isArray(order)||!order.length) return sections;
+  const pos=id=>{const i=order.indexOf(id);return i<0?Infinity:i;};
+  return sections.map((s,i)=>({s,i})).sort((a,b)=>(pos(a.s.id)-pos(b.s.id))||(a.i-b.i)).map(x=>x.s);
+}
+function renderPdfSectionList(){
   const list=document.getElementById('pdf-sections-list');
+  if(!list) return;
+  const n=_pdfSections.length;
   list.innerHTML=_pdfSections.map((s,i)=>`
     <div class="pdf-section-row" onclick="togglePdfSection(${i})">
       <input type="checkbox" id="pdfsec-${i}" ${s.checked?'checked':''} onclick="event.stopPropagation();togglePdfSection(${i})">
@@ -10929,8 +10974,24 @@ function openPdfModal(){
         <div class="pdf-section-label">${esc(s.label)}</div>
         <div class="pdf-section-sub">${esc(s.sub)}</div>
       </div>
+      <div class="pdf-move">
+        <button type="button" title="Subir" aria-label="Subir ${esc(s.label)}" ${i===0?'disabled':''} onclick="event.stopPropagation();movePdfSection(${i},-1)">↑</button>
+        <button type="button" title="Bajar" aria-label="Bajar ${esc(s.label)}" ${i===n-1?'disabled':''} onclick="event.stopPropagation();movePdfSection(${i},1)">↓</button>
+      </div>
     </div>`).join('');
-  document.getElementById('pdf-modal').classList.add('open');
+}
+function movePdfSection(i,d){
+  const j=i+d;
+  if(j<0||j>=_pdfSections.length) return;
+  [_pdfSections[i],_pdfSections[j]]=[_pdfSections[j],_pdfSections[i]];
+  SM_STORE.setSetting('pdfOrder',_pdfSections.map(s=>s.id));
+  renderPdfSectionList();
+}
+function resetPdfOrder(){
+  SM_STORE.setSetting('pdfOrder',[]);
+  const checked=Object.fromEntries(_pdfSections.map(s=>[s.id,s.checked]));
+  _pdfSections=getPdfSections().map(s=>({...s,checked:(s.id in checked)?checked[s.id]:s.checked}));
+  renderPdfSectionList();
 }
 
 function toggleAllPdfSections(){
@@ -11108,6 +11169,21 @@ async function runPdfExport(){
     ay+=9;
   });
 
+  // Título de sección (modo sin portadas): banda de acento arriba de la primera hoja, sobre
+  // la franja de color que ya llevan todas las páginas. No mueve nada del contenido.
+  function drawSectionTitleBand(pdf, sec){
+    const w=pdf.internal.pageSize.getWidth();
+    const label=sec.id.startsWith('artist-')?'CH List':sec.label;
+    pdf.setFillColor(...ACCENT); pdf.rect(0,0,w,6.5,'F');
+    pdf.setFont('helvetica','bold'); pdf.setFontSize(7.5); pdf.setTextColor(255,255,255);
+    pdf.text(safe(String(label).toUpperCase(),60), M, 4.6, {charSpace:0.8});
+    const right=sec.id.startsWith('artist-')?'':(sec.sub||'');
+    if(right){
+      pdf.setFont('helvetica','normal'); pdf.setFontSize(7);
+      pdf.text(safe(right,70), w-M, 4.6, {align:'right'});
+    }
+  }
+
   // Portada divisoria: una página por sección con el nombre del festival y el apartado.
   // Sirve tanto para exportaciones de una sola sección como de separador en el reporte completo.
   function addSectionCover(pdf, title, subtitle){
@@ -11144,11 +11220,14 @@ async function runPdfExport(){
     pdf.text('(c) Luis Anton  lag.sound@gmail.com', PW-M, PH-8, {align:'right'});
   }
 
+  const _secTitles=[];
   for(let si=0;si<selected.length;si++){
     const sec=selected[si];
     prog.textContent=`Generando ${si+1}/${selected.length}: ${sec.label}...`;
     await new Promise(r=>setTimeout(r,10));
-    addSectionCover(pdf, sec.label, sec.sub);
+    // Separador: hoja de portada, o título en la primera hoja de la sección (se pinta al final)
+    if(window._pdfCovers==='titulo') _secTitles.push({start:pdf.getNumberOfPages()+1, sec});
+    else addSectionCover(pdf, sec.label, sec.sub);
 
     // ── 2. ORDEN DEL DIA ──
     if(sec.id==='orden'){
@@ -11737,7 +11816,9 @@ async function runPdfExport(){
         const pies=[ch.pies?.C?'C':'',ch.pies?.A?'A':'',ch.pies?.P?'P':'',ch.pies?.R?'R':''].filter(Boolean).join('');
 
         if(isSimpleMode){
-          return [ci+1, subStr.trim()||'', ch.instrumento||'', ch.micro||ch.di||'', ch.phantom?'48V':'', safe(ch.obs||'',30)];
+          // Tipo de pie con su nombre (Corto, Alto, Pinza, Recto): es lo que se monta en el escenario
+          const pieTxt=PIE_DEFS.filter(p=>ch.pies?.[p.key]).map(p=>t(p.lkey)).join(' / ');
+          return [ci+1, subStr.trim()||'', ch.instrumento||'', ch.micro||ch.di||'', ch.phantom?'48V':'', pieTxt, safe(ch.obs||'',30)];
         }
         return [ci+1, subStr.trim()||'', ch.instrumento||'', ch.canalStage||'', ch.micro||'', ch.di||'', ch.phantom?'48V':'', pies, safe(ch.obs||'',35)];
       });
@@ -11886,15 +11967,16 @@ async function runPdfExport(){
         pdf.autoTable({
           ...tableStyles,
           startY:tableStartY,
-          head:[['#','Sub','Instrumento','Micro / DI','48V','Observaciones']],
+          head:[['#','Sub','Instrumento','Micro / DI','48V','Pie','Observaciones']],
           body,
           columnStyles:{
             0:{cellWidth:10, halign:'center', textColor:GRAY3},
             1:{cellWidth:16, fontStyle:'bold'},
-            2:{cellWidth:68, fontStyle:'bold'},
-            3:{cellWidth:48},
-            4:{cellWidth:14, halign:'center'},
-            5:{cellWidth:cw-156},
+            2:{cellWidth:58, fontStyle:'bold'},
+            3:{cellWidth:44},
+            4:{cellWidth:12, halign:'center'},
+            5:{cellWidth:18},
+            6:{cellWidth:cw-158},
           },
           didParseCell: function(data){ styleSubCell(data, 1, 2, 4); },
           didDrawPage: function(){ drawArtistHeader(); },
@@ -11934,14 +12016,28 @@ async function runPdfExport(){
         const ph2=a.channels.filter(ch=>ch.phantom).length;
         const piC=a.channels.filter(ch=>ch.pies?.C).length;
         const piA=a.channels.filter(ch=>ch.pies?.A).length;
+        const piP=a.channels.filter(ch=>ch.pies?.P).length;
+        const piR=a.channels.filter(ch=>ch.pies?.R).length;
         pdf.text(
-          `Canales: ${a.channels.length}   Con micro: ${mics}   DI Mono: ${diM}   DI Stereo: ${diST}   48V: ${ph2}   Pie Corto: ${piC}   Pie Alto: ${piA}`,
+          `Canales: ${a.channels.length}   Con micro: ${mics}   DI Mono: ${diM}   DI Stereo: ${diST}   48V: ${ph2}   Pie Corto: ${piC}   Pie Alto: ${piA}`+(piP?`   Pie Pinza: ${piP}`:'')+(piR?`   Pie Recto: ${piR}`:''),
           M+3, fy+4
         );
       }
       addFooter(pdf,'CH List  |  '+cleanForPDF(a.nombre), pw, ph);
       } catch(err){ console.error('Error generating CH List for '+a.nombre+':', err); }
     }
+  }
+
+  // Títulos de sección: banda de acento en la primera hoja de cada sección que tenga páginas
+  if(_secTitles.length){
+    const total=pdf.getNumberOfPages();
+    _secTitles.forEach((t,i)=>{
+      const next=i+1<_secTitles.length?_secTitles[i+1].start:total+1;
+      if(t.start>total||t.start>=next) return;              // la sección no generó páginas
+      pdf.setPage(t.start);
+      drawSectionTitleBand(pdf, t.sec);
+    });
+    pdf.setPage(total);
   }
 
   // Save
