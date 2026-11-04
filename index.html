@@ -3023,7 +3023,7 @@ function printCurrentSection(){
   else if(curPage==='rchlist') id='rchlist';
   else if(curPage==='sblist')  id='sblist';
   else if(curPage==='artist'&&curAid) id='artist-'+curAid;
-  else if(curPage==='plan'&&curAid)   id='artist-'+curAid;
+  else if(curPage==='plan'&&curAid)   id='planos';
   if(!id){alert('Esta sección no se puede exportar por separado.');return;}
 
   // Deja marcado solo el apartado actual y restaura la selección previa al terminar.
@@ -3525,7 +3525,7 @@ function renderArtistNav(){
   function itemHtml(a){
     const errs=getPatchErrorsForArtist(a);
     const warn=errs.length?`<span title="${errs.join('\n')}" style="color:var(--accent);font-size:13px;margin-left:2px;display:inline-flex">${SMI.warn}</span>`:'';
-    const hasPlan=!!(a.stagePlan?.pdfFileId||a.stagePlan?.elements?.length);
+    const hasPlan=!!(a.stagePlan?.img||a.stagePlan?.elements?.length);
     return `
     <div class="nav-item" onclick="nav('artist',${a.id})" id="nav-artist-${a.id}">
       <span class="dot"></span>
@@ -7656,6 +7656,50 @@ let _planDragging=null;
 let _planPan={x:0,y:0,startX:0,startY:0,active:false};
 let _planScale=1;
 
+// ── PLANO DE ESCENARIO: imagen ligera + marcas en coordenadas del plano ──
+// El plano se guarda como UNA imagen JPG (la página elegida del PDF, o la foto), de
+// PLAN_PX píxeles en el lado largo. Las marcas viven en un espacio fijo de PLAN_W
+// unidades de ancho con la imagen en (0,0), así caen en el mismo sitio en pantalla
+// (sea cual sea el tamaño de la ventana) y en el PDF.
+const PLAN_W=1000, PLAN_H0=707, PLAN_PX=2000, PLAN_Q=0.82;
+function planHeight(plan){ return (plan&&plan.img&&plan.imgW)? PLAN_W*plan.imgH/plan.imgW : PLAN_H0; }
+/** Convierte la página elegida del PDF (o la imagen) en un JPG ligero. */
+async function planToJpeg(file,b64,pageNum){
+  const cv=document.createElement('canvas');
+  if((file.type||'').includes('pdf')){
+    const pdfjsLib=window.pdfjsLib||window['pdfjs-dist/build/pdf'];
+    if(!pdfjsLib) throw new Error('No se pudo cargar el lector de PDF (¿sin internet?)');
+    pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const bin=atob(b64.split(',')[1]); const bytes=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+    const doc=await pdfjsLib.getDocument({data:bytes}).promise;
+    const page=await doc.getPage(Math.max(1,Math.min(doc.numPages,pageNum||1)));
+    const vp1=page.getViewport({scale:1});
+    const vp=page.getViewport({scale:PLAN_PX/Math.max(vp1.width,vp1.height)});
+    cv.width=Math.round(vp.width); cv.height=Math.round(vp.height);
+    const ctx=cv.getContext('2d'); ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,cv.width,cv.height);
+    await page.render({canvasContext:ctx, viewport:vp}).promise;
+    try{ doc.destroy(); }catch(e){}
+  } else {
+    const img=await new Promise((res,rej)=>{const im=new Image();im.onload=()=>res(im);im.onerror=()=>rej(new Error('No se pudo leer la imagen'));im.src=b64;});
+    const k=Math.min(1,PLAN_PX/Math.max(img.naturalWidth,img.naturalHeight));
+    cv.width=Math.round(img.naturalWidth*k); cv.height=Math.round(img.naturalHeight*k);
+    const ctx=cv.getContext('2d'); ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,cv.width,cv.height);
+    ctx.drawImage(img,0,0,cv.width,cv.height);
+  }
+  return {data:cv.toDataURL('image/jpeg',PLAN_Q), w:cv.width, h:cv.height};
+}
+/** Encaja el plano completo en la ventana. */
+function planFit(aid){
+  const wrap=document.getElementById('plan-canvas-wrap'); const plan=getStagePlan(aid);
+  if(!wrap||!plan) return;
+  const W=wrap.clientWidth||800, H=wrap.clientHeight||600, ph=planHeight(plan);
+  _planScale=Math.max(0.2,Math.min(5,Math.min((W-40)/PLAN_W,(H-40)/ph)));
+  _planPan={x:(W-PLAN_W*_planScale)/2,y:(H-ph*_planScale)/2,active:false,startX:0,startY:0};
+  plan.fitted=true;
+  applyPlanTransform(); savePlanView(aid);
+}
+
 function getStagePlan(aid){
   const a=S.artists.find(x=>String(x.id)===String(aid));
   if(!a) return null;
@@ -7682,7 +7726,7 @@ async function renderStagePlan(aid){
             📄 Subir plano
             <input type="file" accept=".pdf,image/*" style="display:none" onchange="uploadStagePlan(${aid},this)">
           </label>
-          ${(plan.pdfUrl||plan.pdfLocal)?`<button class="btn btn-sm" onclick="removeStagePlanPdf(${aid})" title="Quitar plano" style="color:var(--accent)">🗑 Quitar plano</button>`:''}
+          ${plan.img?`<button class="btn btn-sm" onclick="removeStagePlanPdf(${aid})" title="Quitar plano" style="color:var(--accent)">🗑 Quitar plano</button>`:''}
           <button class="btn btn-sm" onclick="planZoom(${aid},0.2)">＋</button>
           <button class="btn btn-sm" onclick="planZoom(${aid},-0.2)">－</button>
           <button class="btn btn-sm" onclick="planResetView(${aid})">⌂</button>
@@ -7708,13 +7752,13 @@ async function renderStagePlan(aid){
           ontouchmove="planTouchMove(event,${aid})"
           ontouchend="planTouchEnd(event,${aid})">
           <div id="plan-canvas-inner" style="position:absolute;transform-origin:0 0;width:100%;height:100%">
-            <div id="plan-bg" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
-              ${(plan.pdfUrl||plan.pdfLocal)
-                ? `<canvas id="plan-pdf-canvas" style="display:block;box-shadow:0 4px 20px rgba(0,0,0,.5)"></canvas>`
-                : `<div style="color:var(--text3);font-size:13px;text-align:center;padding:60px 40px">
+            <div id="plan-bg" style="position:absolute;left:0;top:0;width:${PLAN_W}px;height:${planHeight(plan)}px">
+              ${plan.img
+                ? `<img id="plan-img" src="${plan.img}" alt="Plano de escenario" draggable="false" style="display:block;width:100%;height:100%;user-select:none;pointer-events:none;box-shadow:0 4px 20px rgba(0,0,0,.5)">`
+                : `<div style="position:absolute;inset:0;border:2px dashed var(--border2);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--text3);font-size:13px;text-align:center;padding:40px">
                     <div style="font-size:48px;margin-bottom:16px;color:var(--text3)">${SMI.map}</div>
-                    <div>Sube un PDF del plano de escenario</div>
-                    <div style="font-size:11px;margin-top:8px">o empieza a colocar elementos directamente</div>
+                    <div>Sube el plano de escenario (PDF o imagen)</div>
+                    <div style="font-size:11px;margin-top:8px">o coloca elementos directamente en este recuadro</div>
                    </div>`}
             </div>
             <div id="plan-elements"></div>
@@ -7728,8 +7772,8 @@ async function renderStagePlan(aid){
 
   applyPlanTransform();
   renderPlanElements(aid);
-  const pdfSrc=plan.pdfUrl||plan.pdfLocal||null;
-  if(pdfSrc) setTimeout(()=>renderPlanPdf(pdfSrc),150);
+  // Primera vez (o plano nuevo): encajarlo en la ventana cuando ya tenga tamaño
+  if(!plan.fitted) requestAnimationFrame(()=>requestAnimationFrame(()=>planFit(aid)));
 }
 
 function setPlanTool(tool,btn){
@@ -7746,21 +7790,10 @@ function applyPlanTransform(){
 function planZoom(aid,delta){
   _planScale=Math.max(0.2,Math.min(5,_planScale+delta));
   applyPlanTransform(); savePlanView(aid);
-  // Re-render PDF at new zoom for crisp quality
-  const plan=getStagePlan(aid);
-  const src=plan?.pdfUrl||plan?.pdfLocal||null;
-  if(src){
-    clearTimeout(window._planZoomTimer);
-    window._planZoomTimer=setTimeout(()=>renderPlanPdf(src,plan.pdfPage||1),250);
-  }
 }
 
 function planResetView(aid){
-  _planPan={x:0,y:0,active:false,startX:0,startY:0};
-  _planScale=1; applyPlanTransform(); savePlanView(aid);
-  const plan=getStagePlan(aid);
-  const src=plan?.pdfUrl||plan?.pdfLocal||null;
-  if(src) renderPlanPdf(src,plan.pdfPage||1);
+  planFit(aid);
 }
 
 function savePlanView(aid){
@@ -8218,31 +8251,18 @@ async function showPagePickerModal(pdfDoc,totalPages,fileName){
 async function doUploadStagePlan(aid,file,b64,pageNum){
   const a=S.artists.find(x=>String(x.id)===String(aid));
   if(!a){ console.error('[PLAN] doUpload: artist not found:', aid); return; }
-  console.log('[PLAN] doUpload page:', pageNum);
   const bg=document.getElementById('plan-bg');
-  if(bg) bg.innerHTML=`<div style="color:var(--text3);font-size:13px;text-align:center;padding:40px"><div style="font-size:32px;margin-bottom:8px">⏳</div><div>Cargando...</div></div>`;
+  if(bg) bg.innerHTML=`<div style="color:var(--text3);font-size:13px;text-align:center;padding:40px">Preparando el plano…</div>`;
   try{
     const plan=getStagePlan(aid);
-    const driveConnected=!!(_driveToken&&Date.now()<_driveTokenExp-60000);
-    if(driveConnected){
-      const folderId=await driveGetOrCreateFolder();
-      const metadata={name:`plano_${(a.nombre||'artista').replace(/[^a-zA-Z0-9]/g,'_')}_${Date.now()}.pdf`,mimeType:file.type||'application/pdf',parents:[folderId]};
-      const form=new FormData();
-      form.append('metadata',new Blob([JSON.stringify(metadata)],{type:'application/json'}));
-      form.append('file',file);
-      const res=await driveRequest('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',{method:'POST',body:form});
-      const data=await res.json();
-      if(!data.id) throw new Error('Drive upload failed');
-      await driveRequest(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({role:'reader',type:'anyone'})});
-      plan.pdfFileId=data.id;
-      plan.pdfUrl=`https://stage-master-backend-1.onrender.com/api/proxy-pdf?id=${data.id}`;
-      plan.pdfLocal=null;
-    } else {
-      plan.pdfFileId=null; plan.pdfUrl=null; plan.pdfLocal=b64;
-    }
-    plan.pdfPage=pageNum;
+    const {data,w,h}=await planToJpeg(file,b64,pageNum);
+    plan.img=data; plan.imgW=w; plan.imgH=h; plan.pdfPage=pageNum||1;
+    // Ya no se guarda el original (pesaba varios MB dentro del proyecto)
+    plan.pdfFileId=null; plan.pdfUrl=null; plan.pdfLocal=null;
+    plan.fitted=false;
     _planPdfDoc=null;
     saveS();
+    console.log('[PLAN] imagen guardada', w+'×'+h, Math.round(data.length*0.75/1024)+' KB');
     await renderStagePlan(aid);
   }catch(e){
     console.error('[PLAN]',e);
@@ -8258,6 +8278,7 @@ function removeStagePlanPdf(aid){
     plan.pdfFileId=null;
     plan.pdfUrl=null;
     plan.pdfLocal=null;
+    plan.img=null; plan.imgW=null; plan.imgH=null; plan.fitted=false;
     plan.pdfPage=1;
     _planPdfDoc=null;
     saveS();
@@ -10739,6 +10760,48 @@ function buildSubboxSvgForPdf(sb, slots, lockedSlots){
   return {svg, width:svgW, height:svgH};
 }
 
+/** Dibuja una marca del plano en el PDF (vectorial). k = mm por unidad del plano.
+ *  el.x/el.y son el CENTRO de la marca (en pantalla van con translate(-50%,-50%)). */
+function drawPlanElementPdf(pdf,el,ox,oy,k){
+  const op=el.opacity??1;
+  const useGS=op<1&&pdf.GState&&pdf.setGState;
+  if(useGS){ pdf.saveGraphicsState(); pdf.setGState(new pdf.GState({opacity:op})); }
+  const PT=0.3528; // mm por punto
+  if(el.type==='nota'){
+    const fsMm=11*k, padX=7*k, padY=4*k;
+    pdf.setFont('helvetica','bold'); pdf.setFontSize(fsMm/PT);
+    const lines=pdf.splitTextToSize(cleanForPDF(el.label||''), 146*k);
+    const tw=Math.max(...lines.map(l=>pdf.getTextWidth(l)), 26*k);
+    const bw=tw+padX*2, bh=lines.length*fsMm*1.25+padY*2;
+    const x=ox+el.x*k-bw/2, y=oy+el.y*k-bh/2;
+    const [r,g,b]=hexToRgb(el.color||'#4fc3f7');
+    pdf.setFillColor(Math.round(255-(255-r)*0.18),Math.round(255-(255-g)*0.18),Math.round(255-(255-b)*0.18));
+    pdf.setDrawColor(r,g,b); pdf.setLineWidth(1.5*k);
+    pdf.roundedRect(x,y,bw,bh,5*k,5*k,'FD');
+    const ink=sbInk(el.color||'#4fc3f7'); const [ir,ig,ib]=hexToRgb(ink==='#ffffff'?el.color:ink);
+    pdf.setTextColor(ir,ig,ib);
+    lines.forEach((l,i)=>pdf.text(l, x+padX, y+padY+fsMm*(i+0.9)*1.25-fsMm*0.25));
+  } else {
+    const d=(el.w||36)*k, r=d/2;
+    const cx=ox+el.x*k, cy=oy+el.y*k;
+    if(el.type==='corriente'){
+      pdf.setFillColor(34,34,34); pdf.circle(cx,cy,r,'F');
+      const P=[[0.18,-0.72],[-0.38,0.12],[-0.02,0.12],[-0.18,0.72],[0.38,-0.12],[0.02,-0.12]].map(([px,py])=>[cx+px*r,cy+py*r]);
+      const deltas=P.slice(1).map((p,i)=>[p[0]-P[i][0],p[1]-P[i][1]]);
+      pdf.setFillColor(255,214,0); pdf.lines(deltas,P[0][0],P[0][1],[1,1],'F',true);
+    } else {
+      const [cr,cg,cb]=hexToRgb(el.color||'#888888');
+      pdf.setFillColor(cr,cg,cb); pdf.circle(cx,cy,r,'F');
+      const fsMm=Math.max(10,Math.round((el.w||36)*0.55))*k;
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(fsMm/PT);
+      const [tr,tg,tb]=hexToRgb(sbInk(el.color||'#888888'));
+      pdf.setTextColor(tr,tg,tb);
+      pdf.text(cleanForPDF(String(el.icon||'')), cx, cy+fsMm*0.35, {align:'center'});
+    }
+  }
+  if(useGS) pdf.restoreGraphicsState();
+}
+
 async function svgToDataUrl(svgString, width, height, scale=2){
   const blob=new Blob([svgString],{type:'image/svg+xml;charset=utf-8'});
   const url=URL.createObjectURL(blob);
@@ -10767,6 +10830,8 @@ function getPdfSections(){
     {id:'rchlist',  label:'Resumen CH List',      sub:'Todos los artistas',      pageId:'page-rchlist', checked:true},
     {id:'sblist',   label:'Resumen Cajetines',       sub:'Diagrama visual',         pageId:'page-sblist',  checked:true},
   ];
+  if(S.artists.some(a=>a.stagePlan&&(a.stagePlan.img||(a.stagePlan.elements||[]).length)))
+    sections.push({id:'planos', label:'Planos de escenario', sub:'Un plano por artista', pageId:'', checked:true});
   // Add one entry per artist CH list
   S.artists.forEach(a=>{
     sections.push({
@@ -11540,8 +11605,36 @@ async function runPdfExport(){
 
             pdf.addImage(imgData,'PNG',imgX,imgY,imgW,imgH);
           }
-          addFooter(pdf,'Plano de escenario  |  '+cleanForPDF(a.nombre));
+          addFooter(pdf,'Resumen Cajetines  |  '+cleanForPDF(a.nombre));
         }
+      }
+    }
+    else if(sec.id==='planos'){
+      // Una página por artista con plano: la imagen ligera y las marcas encima, en vectorial
+      for(const a of S.artists){
+        const plan=a.stagePlan;
+        if(!plan||(!plan.img&&!(plan.elements||[]).length)) continue;
+        prog.textContent=`Generando plano — ${a.nombre}...`;
+        await new Promise(r=>setTimeout(r,5));
+        pdf.addPage([PW,PH],'l');
+        pdf.setFillColor(...BG); pdf.rect(0,0,PW,PH,'F');
+        pdf.setFillColor(...ACCENT); pdf.rect(0,0,PW,5,'F');
+        pdf.setFillColor(240,240,240); pdf.rect(0,5,PW,14,'F');
+        pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(...ACCENT);
+        pdf.text(cleanForPDF(a.nombre), M, 15);
+        pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(...GRAY3);
+        pdf.text(safe(S.event.nombre||'',50), PW-M, 15, {align:'right'});
+        const ph=planHeight(plan);
+        const areaW=PW-M*2, areaH=PH-SB_TOP-SB_BOTTOM-2;
+        const k=Math.min(areaW/PLAN_W, areaH/ph);
+        const ox=M+(areaW-PLAN_W*k)/2, oy=SB_TOP+(areaH-ph*k)/2;
+        if(plan.img){
+          try{ pdf.addImage(plan.img,'JPEG',ox,oy,PLAN_W*k,ph*k); }catch(e){ console.warn('[PLAN] imagen no válida',e); }
+        } else {
+          pdf.setDrawColor(200,200,200); pdf.setLineWidth(0.3); pdf.rect(ox,oy,PLAN_W*k,ph*k);
+        }
+        (plan.elements||[]).forEach(el=>{ try{ drawPlanElementPdf(pdf,el,ox,oy,k); }catch(e){ console.warn('[PLAN] marca',el,e); } });
+        addFooter(pdf,'Plano de escenario  |  '+cleanForPDF(a.nombre));
       }
     }
     else if(sec.id.startsWith('artist-')){
